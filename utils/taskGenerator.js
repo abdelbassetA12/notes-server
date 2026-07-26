@@ -82,7 +82,56 @@ async function generateTasksForDate(
     }
 
     if (!shouldCreate) continue;
+    
+    await TaskOccurrence.updateOne(
 
+  {
+    task: task._id,
+    date
+  },
+
+  {
+
+    $set: {
+
+      title: task.title,
+
+      priority: task.priority,
+
+      categoryName: task.category?.name || "",
+
+      categoryColor: task.category?.color || "#6366F1",
+
+      categoryIcon: task.category?.icon || "📁",
+
+      targetValue: task.targetValue,
+
+      targetUnit: task.targetUnit,
+
+      preferredTime: task.preferredTime,
+
+      description: task.description
+
+    },
+
+    $setOnInsert: {
+
+      user: userId,
+
+      task: task._id,
+
+      date
+
+    }
+
+  },
+
+  {
+    upsert: true
+  }
+
+);
+      /*
     await TaskOccurrence.updateOne(
 
       {
@@ -130,7 +179,8 @@ async function generateTasksForDate(
         upsert: true
       }
 
-    );
+    );*/
+     
   }
 }
 

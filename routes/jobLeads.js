@@ -115,6 +115,32 @@ router.post(
           worksheet
         );
 
+
+        const leads = data.map(row => {
+
+  const lead = {
+    user: req.user.id,
+    type: row.type || "hotel"
+  };
+
+  if (row.companyName) lead.companyName = row.companyName;
+  if (row.country) lead.country = row.country;
+  if (row.city) lead.city = row.city;
+  if (row.email) lead.email = row.email;
+  if (row.phone) lead.phone = row.phone;
+  if (row.website) lead.website = row.website;
+  if (row.contactPerson) lead.contactPerson = row.contactPerson;
+  if (row.desiredJob) lead.desiredJob = row.desiredJob;
+
+  return lead;
+
+//}).filter(lead => lead.companyName);
+}).filter(lead =>
+  lead.companyName &&
+  lead.email &&
+  lead.email.trim() !== ""
+);
+     /*
       const leads = data.map(
         row => ({
 
@@ -148,7 +174,7 @@ router.post(
             row.desiredJob || ""
 
         })
-      );
+      );*/
 
       await JobLead.insertMany(
         leads
