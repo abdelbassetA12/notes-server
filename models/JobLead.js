@@ -24,10 +24,10 @@ const jobLeadSchema = new mongoose.Schema({
 
   type: {
     type: String,
-    enum: [
+     enum: [
       "hotel",
       "restaurant"
-    ],
+    ], 
     required: true
   },
 

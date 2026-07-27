@@ -18,10 +18,7 @@ const upload = multer({
   dest: "uploads/"
 });
 
-router.post(
-  "/import",
-  auth,
-  upload.single("file"),
+router.post( "/import", auth, upload.single("file"),
   async (req, res) => {
 
     try {
@@ -91,10 +88,7 @@ router.post(
   }
 );
 
-router.post(
-  "/import-excel",
-  auth,
-  upload.single("file"),
+router.post( "/import-excel", auth, upload.single("file"),
   async (req, res) => {
 
     try {
@@ -140,41 +134,7 @@ router.post(
   lead.email &&
   lead.email.trim() !== ""
 );
-     /*
-      const leads = data.map(
-        row => ({
-
-          user: req.user.id,
-
-          companyName:
-            row.companyName || "",
-
-          type:
-            row.type || "hotel",
-
-          country:
-            row.country || "",
-
-          city:
-            row.city || "",
-
-          email:
-            row.email || "",
-
-          phone:
-            row.phone || "",
-
-          website:
-            row.website || "",
-
-          contactPerson:
-            row.contactPerson || "",
-
-          desiredJob:
-            row.desiredJob || ""
-
-        })
-      );*/
+    
 
       await JobLead.insertMany(
         leads
@@ -351,43 +311,7 @@ router.get("/", auth, async (req, res) => {
 
 });
 
-// =====================================
-// GET SINGLE LEAD
-// =====================================
 
-router.get("/:id", auth, async (req, res) => {
-
-  try {
-
-    const lead = await JobLead.findOne({
-      _id: req.params.id,
-      user: req.user.id
-    });
-
-    if (!lead) {
-
-      return res.status(404).json({
-        success: false,
-        error: "Lead not found"
-      });
-
-    }
-
-    res.json({
-      success: true,
-      lead
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
-
-});
 
 // =====================================
 // UPDATE LEAD
@@ -438,10 +362,7 @@ router.put("/:id", auth, async (req, res) => {
 // UPDATE STATUS
 // =====================================
 
-router.patch(
-  "/:id/status",
-  auth,
-  async (req, res) => {
+router.patch( "/:id/status", auth, async (req, res) => {
 
     try {
 
@@ -489,10 +410,7 @@ router.patch(
 // TOGGLE FAVORITE
 // =====================================
 
-router.patch(
-  "/:id/favorite",
-  auth,
-  async (req, res) => {
+router.patch( "/:id/favorite", auth, async (req, res) => {
 
     try {
 
@@ -536,10 +454,7 @@ router.patch(
 // TOGGLE ARCHIVE
 // =====================================
 
-router.patch(
-  "/:id/archive",
-  auth,
-  async (req, res) => {
+router.patch( "/:id/archive", auth, async (req, res) => {
 
     try {
 
@@ -583,10 +498,7 @@ router.patch(
 // DELETE LEAD
 // =====================================
 
-router.delete(
-  "/:id",
-  auth,
-  async (req, res) => {
+router.delete( "/:id", auth, async (req, res) => {
 
     try {
 
@@ -626,10 +538,7 @@ router.delete(
 // DASHBOARD STATS
 // =====================================
 
-router.get(
-  "/stats/overview",
-  auth,
-  async (req, res) => {
+router.get( "/stats/overview", auth, async (req, res) => {
 
     try {
 
@@ -705,5 +614,181 @@ router.get(
 
   }
 );
+
+
+
+
+
+
+
+
+
+
+// =====================================
+// FILTERS
+// =====================================
+
+router.get("/filters", auth, async (req, res) => {
+
+    try {
+
+        const countries = await JobLead.distinct(
+            "country",
+            {
+                user: req.user.id,
+                country: {
+                    $ne: ""
+                }
+            }
+        );
+
+        const cities = await JobLead.find(
+            {
+                user: req.user.id,
+                city: {
+                    $ne: ""
+                }
+            },
+            "country city"
+        );
+
+        const result = {};
+
+        cities.forEach(item => {
+
+            if (!result[item.country]) {
+
+                result[item.country] = [];
+
+            }
+
+            if (
+                !result[item.country].includes(item.city)
+            ) {
+
+                result[item.country].push(item.city);
+
+            }
+
+        });
+
+        res.json({
+
+            success: true,
+
+            countries,
+
+            cities: result
+
+        });
+
+    } catch (err) {
+
+        res.status(500).json({
+
+            success: false,
+
+            error: err.message
+
+        });
+
+    }
+
+});
+
+
+
+router.get("/emails", auth, async (req, res) => {
+
+    const {
+        search,
+        status,
+        type,
+        country,
+        city
+    } = req.query;
+
+    const query = {
+        user: req.user.id
+    };
+
+    if (search) {
+        query.$or = [
+            {
+                companyName: {
+                    $regex: search,
+                    $options: "i"
+                }
+            },
+            {
+                email: {
+                    $regex: search,
+                    $options: "i"
+                }
+            }
+        ];
+    }
+
+    if (status) query.status = status;
+    if (type) query.type = type;
+    if (country) query.country = country;
+    if (city) query.city = city;
+
+    const leads = await JobLead.find(
+        query,
+        "email"
+    );
+
+    const emails = leads
+        .filter(l => l.email)
+        .map(l => l.email.trim());
+
+    res.json({
+        success: true,
+        count: emails.length,
+        emails
+    });
+
+});
+
+
+
+// =====================================
+// GET SINGLE LEAD
+// =====================================
+
+router.get("/:id", auth, async (req, res) => {
+
+  try {
+
+    const lead = await JobLead.findOne({
+      _id: req.params.id,
+      user: req.user.id
+    });
+
+    if (!lead) {
+
+      return res.status(404).json({
+        success: false,
+        error: "Lead not found"
+      });
+
+    }
+
+    res.json({
+      success: true,
+      lead
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
 
 module.exports = router;
