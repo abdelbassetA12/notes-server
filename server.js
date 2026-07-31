@@ -88,6 +88,8 @@ app.use('/api/tasks', require('./routes/tasks'));
 
 
 app.use('/api/job-leads', require('./routes/jobLeads'));
+ 
+app.use("/api/email-templates", require("./routes/emailTemplates"));
 
 
 

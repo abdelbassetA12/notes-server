@@ -11,9 +11,9 @@ const csv = require("csv-parser");
 
 const XLSX = require("xlsx");
 const fs = require("fs");
+const sendJobEmail = require("../utils/jobMailer");
 
-
-
+ 
 const upload = multer({
   dest: "uploads/"
 });
@@ -748,6 +748,99 @@ router.get("/emails", auth, async (req, res) => {
         count: emails.length,
         emails
     });
+
+});
+
+
+ 
+
+
+router.post("/send", auth, async (req, res) => {
+
+    try {
+
+        const {
+            search,
+            status,
+            type,
+            country,
+            city
+        } = req.body;
+
+        const query = {
+            user: req.user.id,
+            email: { $ne: "" }
+        };
+
+        if (search) {
+            query.$or = [
+                {
+                    companyName: {
+                        $regex: search,
+                        $options: "i"
+                    }
+                },
+                {
+                    email: {
+                        $regex: search,
+                        $options: "i"
+                    }
+                }
+            ];
+        }
+
+        if (status) query.status = status;
+        if (type) query.type = type;
+        if (country) query.country = country;
+        if (city) query.city = city;
+
+        const leads = await JobLead.find(query);
+
+        let success = 0;
+        let failed = 0;
+
+        for (const lead of leads) {
+
+            try {
+
+                await sendJobEmail({
+
+                    
+                      to: lead.email,
+                    company: lead.companyName
+
+                });
+
+                success++;
+
+            } catch (err) {
+
+                failed++;
+                console.log(err);
+
+            }
+
+        }
+
+        res.json({
+
+            success: true,
+            sent: success,
+            failed,
+            message: `${success} emails sent successfully.`
+
+        });
+
+    } catch (err) {
+
+        res.status(500).json({
+
+            success: false,
+            error: err.message
+
+        });
+
+    }
 
 });
 
