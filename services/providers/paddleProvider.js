@@ -570,185 +570,150 @@ async createCustomer(user) {
    * | Checkout
    * |--------------------------------------------------------------------------
    */
+async createCheckout({ user, plan, billingCycle, customer }) {
+  if (!user) {
+    throw new Error("User is required.");
+  }
 
-  async createCheckout({
-    user,
+  if (!plan) {
+    throw new Error("Subscription plan is required.");
+  }
+
+  if (plan.isFree) {
+    throw new Error("Free plans do not require Paddle Checkout.");
+  }
+
+  if (!["monthly", "yearly"].includes(billingCycle)) {
+    throw new Error(
+      "Paddle supports monthly or yearly billing for paid plans."
+    );
+  }
+
+  const customerId = this.getCustomerId(customer);
+
+  if (!customerId) {
+    throw new Error("Paddle customer ID is required.");
+  }
+
+  const priceId = this.getStripeLikePriceId(
     plan,
-    billingCycle,
-    customer
-  }) {
-    if (!user) {
-      throw new Error(
-        "User is required."
-      );
-    }
+    billingCycle
+  );
 
-    if (!plan) {
-      throw new Error(
-        "Subscription plan is required."
-      );
-    }
+  if (!priceId) {
+    throw new Error(
+      `No Paddle price ID configured for plan "${plan.name}" (${billingCycle}).`
+    );
+  }
 
-    if (plan.isFree) {
-      throw new Error(
-        "Free plans do not require Paddle Checkout."
-      );
-    }
+  const userId = this.getUserId(user);
 
-    if (
-      !["monthly", "yearly"].includes(
-        billingCycle
-      )
-    ) {
-      throw new Error(
-        "Paddle supports monthly or yearly billing for paid plans."
-      );
-    }
+  const frontendUrl = this.getFrontendUrl();
 
-    const customerId =
-      this.getCustomerId(customer);
+  const response = await this.request("/transactions", {
+    method: "POST",
 
-    if (!customerId) {
-      throw new Error(
-        "Paddle customer ID is required."
-      );
-    }
-
-    const priceId =
-      this.getStripeLikePriceId(
-        plan,
-        billingCycle
-      );
-
-    if (!priceId) {
-      throw new Error(
-        `No Paddle price ID configured for plan "${plan.name}" (${billingCycle}).`
-      );
-    }
-
-    const userId =
-      this.getUserId(user);
-
-    const frontendUrl =
-      this.getFrontendUrl();
-
-    /**
-     * Paddle creates an automatically
-     * collected transaction and returns
-     * a checkout URL.
-     */
-
-    const response =
-      await this.request(
-        "/transactions",
+    body: {
+      items: [
         {
-          method: "POST",
-
-          body: {
-            items: [
-              {
-                price_id:
-                  priceId,
-
-                quantity: 1
-              }
-            ],
-
-            customer_id:
-              customerId,
-
-            collection_mode:
-              "automatic",
-
-            custom_data: {
-              qevoraUserId:
-                String(userId),
-
-              planId:
-                String(
-                  plan._id ||
-                  plan.id
-                ),
-
-              planSlug:
-                plan.slug || "",
-
-              billingCycle,
-
-              provider:
-                "paddle"
-            },
-
-            checkout: {
-              url:
-                `${frontendUrl}/subscription/success`
-            }
-          }
+          price_id: priceId,
+          quantity: 1
         }
-      );
+      ],
 
-    const transaction =
-      response?.data;
+      customer_id: customerId,
 
-    const checkoutUrl =
-      transaction?.checkout?.url ||
-      null;
+      collection_mode: "automatic",
 
-    if (!checkoutUrl) {
-      throw new Error(
-        "Paddle did not return a checkout URL."
-      );
+      custom_data: {
+        qevoraUserId: String(userId),
+        planId: String(plan._id || plan.id),
+        planSlug: plan.slug || "",
+        billingCycle,
+        provider: "paddle"
+      },
+
+      checkout: {
+        url: `${frontendUrl}/subscription/success`
+      }
     }
+  });
 
-    return {
-      provider: "paddle",
+  const transaction = response?.data;
 
-      checkoutId:
-        transaction?.id ||
-        null,
+  if (!transaction) {
+    throw new Error(
+      "Paddle did not return a transaction."
+    );
+  }
 
-      id:
-        transaction?.id ||
-        null,
+  /*
+   * Paddle Hosted Checkout URL
+   */
+  const checkoutUrl =
+    transaction?.checkout?.url ||
+    null;
 
-      transactionId:
-        transaction?.id ||
-        null,
+  if (!checkoutUrl) {
+    console.error(
+      "PADDLE TRANSACTION:",
+      JSON.stringify(transaction, null, 2)
+    );
 
-      checkoutUrl,
+    throw new Error(
+      "Paddle did not return a checkout URL."
+    );
+  }
 
-      url:
-        checkoutUrl,
+  console.log(
+    "PADDLE CHECKOUT URL:",
+    checkoutUrl
+  );
 
+  return {
+    provider: "paddle",
+
+    checkoutId:
+      transaction.id || null,
+
+    id:
+      transaction.id || null,
+
+    transactionId:
+      transaction.id || null,
+
+    checkoutUrl,
+
+    url: checkoutUrl,
+
+    customerId,
+
+    providerCustomerId:
       customerId,
 
-      providerCustomerId:
-        customerId,
+    subscriptionId:
+      transaction.subscription_id || null,
 
-      subscriptionId:
-        transaction?.subscription_id ||
-        null,
+    mode: "subscription",
 
-      mode: "subscription",
+    status:
+      transaction.status || "ready",
 
-      status:
-        transaction?.status ||
-        "ready",
+    paymentStatus:
+      transaction.status === "completed"
+        ? "paid"
+        : "pending",
 
-      paymentStatus:
-        transaction?.status ===
-        "completed"
-          ? "paid"
-          : "pending",
+    billingCycle,
 
-      billingCycle,
-
-      planId:
-        plan._id ||
-        plan.id ||
-        null
-    };
-  }
+    planId:
+      plan._id ||
+      plan.id ||
+      null
+  };
+}
+ 
+ 
 
   /**
    * |--------------------------------------------------------------------------
