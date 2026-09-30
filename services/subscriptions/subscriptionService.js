@@ -3,6 +3,7 @@ const Subscription =
 
 const SubscriptionPlan =
   require("../../models/SubscriptionPlan");
+  const User = require("../../models/User");
 
 const Payment =
   require("../../models/Payment");
@@ -246,6 +247,13 @@ async function createCheckout({
       "Authenticated user is required."
     );
   }
+  const dbUser = await User.findById(userId);
+
+if (!dbUser) {
+  throw new Error(
+    "User account not found."
+  );
+}
 
   const plan =
     await getPlanById(planId);
@@ -362,7 +370,8 @@ async function createCheckout({
   if (!customerId) {
     const customer =
       await provider.createCustomer(
-        user
+        //user
+         dbUser
       );
 
     customerId =
