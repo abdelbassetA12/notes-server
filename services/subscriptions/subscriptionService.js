@@ -233,12 +233,15 @@ async function ensureFreeSubscription(
  * |--------------------------------------------------------------------------
  */
 
+ 
 async function createCheckout({
   user,
   planId,
   billingCycle
 }) {
-  if (!user || !user._id) {
+  const userId = user?._id || user?.id;
+
+  if (!userId) {
     throw new Error(
       "Authenticated user is required."
     );
@@ -259,16 +262,195 @@ async function createCheckout({
     );
   }
 
-  /**
-   * ============================================================
-   * الخطة المجانية
-   * ============================================================
-   */
+  // ============================================================
+  // الخطة المجانية
+  // ============================================================
+
+  if (plan.isFree) {
+    const existing =
+      await getUserSubscription(
+        userId
+      );
+
+    if (
+      existing &&
+      existing.plan &&
+      existing.plan._id.toString() ===
+        plan._id.toString()
+    ) {
+      return {
+        type: "already_active",
+        subscription: existing
+      };
+    }
+
+    if (existing) {
+      throw new Error(
+        "User already has an active subscription."
+      );
+    }
+
+    const now = new Date();
+
+    const subscription =
+      await Subscription.create({
+        user: userId,
+        plan: plan._id,
+        status: "active",
+        provider: "internal",
+        billingCycle: "lifetime",
+        currentPeriodStart: now,
+        currentPeriodEnd: null,
+        startedAt: now,
+        cancelAtPeriodEnd: false
+      });
+
+    return {
+      type: "subscription_created",
+      subscription:
+        await Subscription.findById(
+          subscription._id
+        ).populate("plan")
+    };
+  }
+
+  // ============================================================
+  // الخطط المدفوعة
+  // ============================================================
+
+  if (billingCycle === "lifetime") {
+    throw new Error(
+      "Lifetime billing is only available for free plans."
+    );
+  }
+
+  const providerName =
+    process.env.PAYMENT_PROVIDER ||
+    "internal";
+
+  const provider =
+    getProvider(providerName);
+
+  // ============================================================
+  // Provider داخلي لا يدعم الخطط المدفوعة
+  // ============================================================
+
+  if (providerName === "internal") {
+    throw new Error(
+      "Paid plans require an external payment provider."
+    );
+  }
+
+  const existing =
+    await getUserSubscription(
+      userId
+    );
+
+  // ============================================================
+  // إعادة استخدام Customer ID إن وجد
+  // ============================================================
+
+  let customerId =
+    existing?.provider === providerName
+      ? existing.providerCustomerId || ""
+      : "";
+
+  // ============================================================
+  // إنشاء Customer جديد
+  // ============================================================
+
+  if (!customerId) {
+    const customer =
+      await provider.createCustomer(
+        user
+      );
+
+    customerId =
+      customer?.providerCustomerId ||
+      customer?.id ||
+      "";
+
+    if (!customerId) {
+      throw new Error(
+        "Payment provider did not return a customer ID."
+      );
+    }
+  }
+
+  // ============================================================
+  // إنشاء Checkout
+  // ============================================================
+
+  const checkout =
+    await provider.createCheckout({
+      user,
+      plan,
+      billingCycle,
+      customer: {
+        id: customerId
+      }
+    });
+
+  if (!checkout) {
+    throw new Error(
+      "Payment provider did not return checkout data."
+    );
+  }
+
+  return {
+    type: "checkout_created",
+    checkoutUrl:
+      checkout.checkoutUrl ||
+      checkout.url ||
+      null,
+    provider: providerName,
+    customerId,
+    plan: {
+      id: plan._id,
+      name: plan.name,
+      slug: plan.slug
+    }
+  };
+}
+ 
+
+ /*
+async function createCheckout({
+  user,
+  planId,
+  billingCycle
+}) {
+  if (!user || !user._id) {
+    throw new Error(
+      "Authenticated user is required."
+    );
+  }
+  
+
+  const plan =
+    await getPlanById(planId);
+
+  if (
+    ![
+      "monthly",
+      "yearly",
+      "lifetime"
+    ].includes(billingCycle)
+  ) {
+    throw new Error(
+      "Invalid billing cycle."
+    );
+  }
+
+ 
+  // الخطة المجانية
+  
 
   if (plan.isFree) {
     const existing =
       await getUserSubscription(
         user._id
+        
       );
 
     if (
@@ -313,11 +495,8 @@ async function createCheckout({
     };
   }
 
-  /**
-   * ============================================================
-   * الخطط المدفوعة
-   * ============================================================
-   */
+    //الخطط المدفوعة
+  
 
   if (billingCycle === "lifetime") {
     throw new Error(
@@ -331,11 +510,10 @@ async function createCheckout({
 
   const provider =
     getProvider(providerName);
-
-  /**
-   * إذا كان Provider داخليًا،
-   * فإن الخطط المدفوعة غير مدعومة.
-   */
+ 
+    //إذا كان Provider داخليًا،
+   // فإن الخطط المدفوعة غير مدعومة.
+    
 
   if (providerName === "internal") {
     throw new Error(
@@ -348,20 +526,18 @@ async function createCheckout({
       user._id
     );
 
-  /**
-   * إذا كان لدينا Customer ID سابقًا
-   * نعيد استخدامه.
-   */
+  // إذا كان لدينا Customer ID سابقًا
+ // نعيد استخدامه.
+  
 
   let customerId =
     existing?.provider === providerName
       ? existing.providerCustomerId || ""
       : "";
 
-  /**
-   * إذا لم يكن لدينا Customer،
-   * ننشئ Customer جديدًا لدى Provider.
-   */
+  // إذا لم يكن لدينا Customer،
+  // ننشئ Customer جديدًا لدى Provider.
+   
 
   if (!customerId) {
     const customer =
@@ -415,7 +591,7 @@ async function createCheckout({
       slug: plan.slug
     }
   };
-}
+}*/
 
 /**
  * |--------------------------------------------------------------------------
