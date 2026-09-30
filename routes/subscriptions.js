@@ -266,7 +266,6 @@ router.post(
         await changePlan({
 
           user: req.user,
-           userId: req.user.id,
 
           newPlanId:
             planId,

@@ -551,7 +551,19 @@ async function activateSubscription({
  * تغيير الخطة
  * |--------------------------------------------------------------------------
  */
+async function changePlan({
+  user,
+  newPlanId,
+  billingCycle
+}) {
+  const userId = user?._id || user?.id;
 
+  if (!userId) {
+    throw new Error(
+      "Authenticated user is required."
+    );
+  }
+  /*
 async function changePlan({
   user,
   newPlanId,
@@ -561,17 +573,22 @@ async function changePlan({
     throw new Error(
       "Authenticated user is required."
     );
-  }
+  }*/
 
   const newPlan =
     await getPlanById(
       newPlanId
     );
-
+  const subscription =
+  await getUserSubscription(
+    userId
+  );
+  /*
   const subscription =
     await getUserSubscription(
       user._id
     );
+    */
 
   /**
    * لا يوجد اشتراك:
