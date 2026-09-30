@@ -237,7 +237,100 @@ class PaddleProvider extends PaymentProvider {
    * | Customer
    * |--------------------------------------------------------------------------
    */
+ 
+async createCustomer(user) {
+  const email = String(user?.email || "").trim();
 
+  if (!email) {
+    throw new Error(
+      "User email is required to create a Paddle customer."
+    );
+  }
+
+  const headers = {
+    Authorization: `Bearer ${process.env.PADDLE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Paddle-Version": "1"
+  };
+
+  const baseUrl =
+    process.env.PADDLE_ENVIRONMENT === "sandbox"
+      ? "https://sandbox-api.paddle.com"
+      : "https://api.paddle.com";
+
+  // 1. البحث أولاً عن Customer موجود بنفس البريد
+  const searchResponse = await fetch(
+    `${baseUrl}/customers?email=${encodeURIComponent(email)}`,
+    {
+      method: "GET",
+      headers
+    }
+  );
+
+  const searchData = await searchResponse.json();
+
+  if (!searchResponse.ok) {
+    throw new Error(
+      searchData?.error?.detail ||
+      searchData?.error?.message ||
+      "Failed to search Paddle customer."
+    );
+  }
+
+  const existingCustomer =
+    searchData?.data?.find(
+      (customer) =>
+        String(customer.email || "").toLowerCase() ===
+        email.toLowerCase()
+    );
+
+  if (existingCustomer) {
+    return {
+      providerCustomerId: existingCustomer.id,
+      id: existingCustomer.id,
+      email: existingCustomer.email
+    };
+  }
+
+  // 2. إذا لم يوجد Customer، أنشئ واحداً
+  const createResponse = await fetch(
+    `${baseUrl}/customers`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        email
+      })
+    }
+  );
+
+  const createData = await createResponse.json();
+
+  if (!createResponse.ok) {
+    throw new Error(
+      createData?.error?.detail ||
+      createData?.error?.message ||
+      "Failed to create Paddle customer."
+    );
+  }
+
+  const customer = createData?.data;
+
+  if (!customer?.id) {
+    throw new Error(
+      "Paddle did not return a customer ID."
+    );
+  }
+
+  return {
+    providerCustomerId: customer.id,
+    id: customer.id,
+    email: customer.email
+  };
+}
+ 
+
+/*
   async createCustomer(user) {
     if (!user) {
       throw new Error(
@@ -300,7 +393,7 @@ class PaddleProvider extends PaymentProvider {
       name:
         customer.name || null
     };
-  }
+  }*/
 
   /**
    * |--------------------------------------------------------------------------
