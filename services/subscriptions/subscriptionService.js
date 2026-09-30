@@ -1309,45 +1309,29 @@ async function updatePaymentStatus({
  * معالجة Webhook موحد
  * |--------------------------------------------------------------------------
  */
-
 async function processWebhookEvent({
   provider,
   event
 }) {
   if (!provider) {
-    throw new Error(
-      "Webhook provider is required."
-    );
+    throw new Error("Webhook provider is required.");
   }
 
   if (!event) {
-    throw new Error(
-      "Webhook event is required."
-    );
+    throw new Error("Webhook event is required.");
   }
-
-  /**
-   * ============================================================
-   * حماية من التكرار
-   * ============================================================
-   */
 
   let eventRecord;
 
   try {
-    eventRecord =
-      await SubscriptionEvent.create({
-        provider,
-        providerEventId:
-          event.providerEventId,
-        eventType:
-          event.eventType,
-        normalizedType:
-          event.normalizedType,
-        data:
-          event.data || {},
-        processed: false
-      });
+    eventRecord = await SubscriptionEvent.create({
+      provider,
+      providerEventId: event.providerEventId,
+      eventType: event.eventType,
+      normalizedType: event.normalizedType,
+      data: event.data || {},
+      processed: false
+    });
   } catch (error) {
     if (error.code === 11000) {
       return {
@@ -1360,50 +1344,316 @@ async function processWebhookEvent({
   }
 
   try {
-    const data =
-      event.data || {};
+    const data = event.data || {};
 
-    /**
-     * ==========================================================
-     * PAYMENT_SUCCEEDED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | Helpers
+    |--------------------------------------------------------------------------
+    */
+
+    const getNested = (object, paths = []) => {
+      for (const path of paths) {
+        const parts = path.split(".");
+        let value = object;
+
+        for (const part of parts) {
+          if (
+            value === null ||
+            value === undefined ||
+            typeof value !== "object"
+          ) {
+            value = undefined;
+            break;
+          }
+
+          value = value[part];
+        }
+
+        if (
+          value !== undefined &&
+          value !== null &&
+          value !== ""
+        ) {
+          return value;
+        }
+      }
+
+      return null;
+    };
+
+    const customData =
+      data.customData ||
+      data.custom_data ||
+      data.metadata?.customData ||
+      data.metadata?.custom_data ||
+      {};
+
+    const metadata =
+      data.metadata ||
+      {};
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج User ID
+    |--------------------------------------------------------------------------
+    */
+
+    const resolvedUserId =
+      data.userId ||
+      data.user_id ||
+      customData.userId ||
+      customData.user_id ||
+      customData.qevoraUserId ||
+      customData.qevora_user_id ||
+      metadata.userId ||
+      metadata.user_id ||
+      metadata.qevoraUserId ||
+      metadata.qevora_user_id ||
+      null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج Paddle Customer ID
+    |--------------------------------------------------------------------------
+    */
+
+    const resolvedCustomerId =
+      data.customerId ||
+      data.customer_id ||
+      data.customer?.id ||
+      null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج Paddle Subscription ID
+    |--------------------------------------------------------------------------
+    */
+
+    const resolvedSubscriptionId =
+      data.subscriptionId ||
+      data.subscription_id ||
+      data.subscription?.id ||
+      null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج Price ID
+    |--------------------------------------------------------------------------
+    */
+
+    const resolvedPriceId =
+      data.priceId ||
+      data.price_id ||
+      data.items?.[0]?.priceId ||
+      data.items?.[0]?.price_id ||
+      data.items?.[0]?.price?.id ||
+      data.items?.[0]?.price?.priceId ||
+      data.subscription?.items?.[0]?.priceId ||
+      data.subscription?.items?.[0]?.price_id ||
+      data.subscription?.items?.[0]?.price?.id ||
+      customData.priceId ||
+      customData.price_id ||
+      metadata.priceId ||
+      metadata.price_id ||
+      null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج Plan ID
+    |--------------------------------------------------------------------------
+    */
+
+    let resolvedPlanId =
+      data.planId ||
+      data.plan_id ||
+      customData.planId ||
+      customData.plan_id ||
+      metadata.planId ||
+      metadata.plan_id ||
+      null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | استخراج Billing Cycle
+    |--------------------------------------------------------------------------
+    */
+
+    const resolvedBillingCycle =
+      data.billingCycle ||
+      data.billing_cycle ||
+      customData.billingCycle ||
+      customData.billing_cycle ||
+      metadata.billingCycle ||
+      metadata.billing_cycle ||
+      (
+        data.billingPeriod === "year"
+          ? "yearly"
+          : data.billingPeriod === "month"
+            ? "monthly"
+            : null
+      ) ||
+      "monthly";
+
+    /*
+    |--------------------------------------------------------------------------
+    | البحث عن User من Customer ID إذا لم نجد userId مباشرة
+    |--------------------------------------------------------------------------
+    */
+
+    let resolvedUser = null;
+
+    if (resolvedUserId) {
+      resolvedUser = await User.findById(resolvedUserId);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | إذا كان لدينا اشتراك محلي سابق، نستخرج منه User
+    |--------------------------------------------------------------------------
+    */
+
+    let localSubscription = null;
+
+    if (resolvedSubscriptionId) {
+      localSubscription =
+        await getSubscriptionByProviderId(
+          provider,
+          resolvedSubscriptionId
+        );
+    }
+
+    if (!localSubscription && resolvedCustomerId) {
+      localSubscription =
+        await getSubscriptionByCustomerId(
+          provider,
+          resolvedCustomerId
+        );
+    }
+
+    if (!resolvedUser && localSubscription) {
+      resolvedUser =
+        await User.findById(localSubscription.user);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | محاولة العثور على User بواسطة Customer ID
+    |--------------------------------------------------------------------------
+    |
+    | نبحث في الحقول المحتملة دون افتراض أن كل نسخة من User
+    | تحتوي على نفس الحقل.
+    |
+    */
+
+    if (!resolvedUser && resolvedCustomerId) {
+      resolvedUser = await User.findOne({
+        $or: [
+          {
+            paddleCustomerId: resolvedCustomerId
+          },
+          {
+            "payment.paddleCustomerId":
+              resolvedCustomerId
+          },
+          {
+            "billing.paddleCustomerId":
+              resolvedCustomerId
+          }
+        ]
+      });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | إذا لم يكن لدينا Plan ID، نحاول استخراجه من Price ID
+    |--------------------------------------------------------------------------
+    |
+    | هذا مهم جدًا مع Paddle.
+    |
+    | Paddle يعطي Price ID بينما التطبيق يحتاج MongoDB
+    | SubscriptionPlan._id.
+    |
+    */
+
+    if (!resolvedPlanId && resolvedPriceId) {
+      const plans = await SubscriptionPlan.find({
+        active: true
+      }).lean();
+
+      for (const candidatePlan of plans) {
+        const json =
+          JSON.stringify(candidatePlan);
+
+        if (
+          json.includes(String(resolvedPriceId))
+        ) {
+          resolvedPlanId =
+            candidatePlan._id;
+          break;
+        }
+      }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | إذا وجدنا اشتراكًا محليًا قديمًا، نستخدم خطته
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      !resolvedPlanId &&
+      localSubscription
+    ) {
+      resolvedPlanId =
+        localSubscription.plan?._id ||
+        localSubscription.plan ||
+        null;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | PAYMENT_SUCCEEDED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
       "PAYMENT_SUCCEEDED"
     ) {
-      let subscription = null;
+      let subscription =
+        localSubscription;
 
-      if (
-        data.subscriptionId
-      ) {
+      if (!subscription && resolvedSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            data.subscriptionId
+            resolvedSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            data.customerId
+            resolvedCustomerId
           );
       }
 
       const userId =
-        data.userId ||
-        subscription?.user?.toString?.() ||
-        subscription?.user?._id;
+        resolvedUser?._id ||
+        resolvedUserId ||
+        subscription?.user?._id ||
+        subscription?.user ||
+        null;
 
       const subscriptionId =
         subscription?._id ||
-        data.localSubscriptionId;
+        data.localSubscriptionId ||
+        null;
 
       if (
         userId &&
@@ -1414,29 +1664,44 @@ async function processWebhookEvent({
           subscriptionId,
           provider,
           providerPaymentId:
-            data.paymentId || "",
+            data.paymentId ||
+            data.payment_id ||
+            data.transactionId ||
+            data.transaction_id ||
+            "",
           amount:
             Number(
-              data.amount || 0
+              data.amount ||
+              data.total ||
+              data.details?.totals?.grandTotal ||
+              0
             ),
           currency:
             data.currency ||
+            data.currencyCode ||
             "USD",
           type:
             data.type ||
             "subscription",
           status: "paid",
-          metadata:
-            data.metadata || {}
+          metadata: {
+            ...(data.metadata || {}),
+            priceId:
+              resolvedPriceId || "",
+            customerId:
+              resolvedCustomerId || "",
+            subscriptionId:
+              resolvedSubscriptionId || ""
+          }
         });
       }
     }
 
-    /**
-     * ==========================================================
-     * PAYMENT_FAILED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | PAYMENT_FAILED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1445,18 +1710,22 @@ async function processWebhookEvent({
       await updatePaymentStatus({
         provider,
         providerPaymentId:
-          data.paymentId || "",
+          data.paymentId ||
+          data.payment_id ||
+          data.transactionId ||
+          data.transaction_id ||
+          "",
         status: "failed",
         metadata:
           data.metadata || {}
       });
     }
 
-    /**
-     * ==========================================================
-     * PAYMENT_REFUNDED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | PAYMENT_REFUNDED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1465,7 +1734,11 @@ async function processWebhookEvent({
       await updatePaymentStatus({
         provider,
         providerPaymentId:
-          data.paymentId || "",
+          data.paymentId ||
+          data.payment_id ||
+          data.transactionId ||
+          data.transaction_id ||
+          "",
         status:
           data.refundStatus ===
           "partially_refunded"
@@ -1474,144 +1747,187 @@ async function processWebhookEvent({
         metadata: {
           ...(data.metadata || {}),
           refundId:
-            data.refundId || "",
+            data.refundId ||
+            data.refund_id ||
+            "",
           refundAmount:
-            data.refundAmount || 0
+            data.refundAmount ||
+            data.refund_amount ||
+            0
         }
       });
     }
 
-    /**
-     * ==========================================================
-     * SUBSCRIPTION_CREATED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | SUBSCRIPTION_CREATED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
       "SUBSCRIPTION_CREATED"
     ) {
-      let userId =
-        data.userId || null;
+      let subscription =
+        localSubscription;
 
-      let planId =
-        data.planId || null;
-
-      let subscription = null;
-
-      /**
-       * أولًا نحاول بواسطة Provider Subscription ID.
-       */
+      /*
+      |--------------------------------------------------------------
+      | البحث بواسطة Paddle Subscription ID
+      |--------------------------------------------------------------
+      */
 
       if (
-        data.subscriptionId
+        !subscription &&
+        resolvedSubscriptionId
       ) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            data.subscriptionId
+            resolvedSubscriptionId
           );
       }
 
-      /**
-       * ثم بواسطة Customer ID.
-       */
+      /*
+      |--------------------------------------------------------------
+      | البحث بواسطة Paddle Customer ID
+      |--------------------------------------------------------------
+      */
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            data.customerId
+            resolvedCustomerId
           );
       }
 
-      /**
-       * إذا وجدنا اشتراكًا محليًا،
-       * نستخدم بياناته عند الحاجة.
-       */
+      /*
+      |--------------------------------------------------------------
+      | User
+      |--------------------------------------------------------------
+      */
 
-      if (subscription) {
-        userId =
-          userId ||
-          subscription.user?._id ||
-          subscription.user;
+      const userId =
+        resolvedUser?._id ||
+        resolvedUserId ||
+        subscription?.user?._id ||
+        subscription?.user ||
+        null;
 
-        planId =
-          planId ||
-          subscription.plan?._id ||
-          subscription.plan;
-      }
+      /*
+      |--------------------------------------------------------------
+      | Plan
+      |--------------------------------------------------------------
+      */
+
+      const planId =
+        resolvedPlanId ||
+        subscription?.plan?._id ||
+        subscription?.plan ||
+        null;
+
+      /*
+      |--------------------------------------------------------------
+      | تفعيل الاشتراك
+      |--------------------------------------------------------------
+      */
 
       if (
         userId &&
-        planId
+        planId &&
+        resolvedSubscriptionId
       ) {
         await activateSubscription({
           userId,
           planId,
           provider,
           providerCustomerId:
-            data.customerId || "",
+            resolvedCustomerId || "",
           providerSubscriptionId:
-            data.subscriptionId || "",
+            resolvedSubscriptionId,
           billingCycle:
-            data.billingCycle ||
-            "monthly",
+            resolvedBillingCycle,
           currentPeriodStart:
             data.periodStart
               ? new Date(
                   data.periodStart
                 )
-              : new Date(),
+              : data.currentPeriodStart
+                ? new Date(
+                    data.currentPeriodStart
+                  )
+                : new Date(),
           currentPeriodEnd:
             data.periodEnd
               ? new Date(
                   data.periodEnd
                 )
-              : null,
+              : data.currentPeriodEnd
+                ? new Date(
+                    data.currentPeriodEnd
+                  )
+                : null,
           status:
             data.status ||
             "active",
-          metadata:
-            data.metadata || {}
+          metadata: {
+            ...(data.metadata || {}),
+            priceId:
+              resolvedPriceId || "",
+            customerId:
+              resolvedCustomerId || "",
+            subscriptionId:
+              resolvedSubscriptionId || ""
+          }
         });
+      } else {
+        /*
+        |--------------------------------------------------------------
+        | مهم:
+        | لا نعتبر الحدث ناجحًا إذا لم نستطع ربطه بالمستخدم والخطة.
+        |--------------------------------------------------------------
+        */
+
+        throw new Error(
+          [
+            "Unable to activate Paddle subscription.",
+            `userId=${userId || "missing"}`,
+            `planId=${planId || "missing"}`,
+            `customerId=${resolvedCustomerId || "missing"}`,
+            `subscriptionId=${resolvedSubscriptionId || "missing"}`,
+            `priceId=${resolvedPriceId || "missing"}`
+          ].join(" ")
+        );
       }
     }
 
-    /**
-     * ==========================================================
-     * CHECKOUT_COMPLETED
-     * ==========================================================
-     *
-     * في Stripe، هذا الحدث يعني أن Checkout
-     * اكتمل، لكنه ليس المصدر الوحيد لتفعيل
-     * الاشتراك.
-     *
-     * لذلك لا ننشئ Subscription هنا إذا لم
-     * تصل بيانات كافية.
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | CHECKOUT_COMPLETED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
       "CHECKOUT_COMPLETED"
     ) {
-      /**
-       * لا نفعل الاشتراك هنا.
+      /*
+       * لا نفعّل الاشتراك هنا.
        *
-       * customer.subscription.created
-       * هو المسؤول الأساسي عن إنشاء/تحديث
-       * الاشتراك.
+       * Paddle subscription.created هو المصدر
+       * الأساسي لإنشاء الاشتراك.
        */
     }
 
-    /**
-     * ==========================================================
-     * SUBSCRIPTION_UPDATED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | SUBSCRIPTION_UPDATED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1619,26 +1935,24 @@ async function processWebhookEvent({
     ) {
       let subscription = null;
 
-      if (
-        data.subscriptionId
-      ) {
+      if (resolvedSubscriptionId) {
         subscription =
           await Subscription.findOne({
             provider,
             providerSubscriptionId:
-              data.subscriptionId
+              resolvedSubscriptionId
           });
       }
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await Subscription.findOne({
             provider,
             providerCustomerId:
-              data.customerId
+              resolvedCustomerId
           });
       }
 
@@ -1648,39 +1962,29 @@ async function processWebhookEvent({
             data.status;
         }
 
-        if (
-          data.customerId
-        ) {
+        if (resolvedCustomerId) {
           subscription.providerCustomerId =
-            data.customerId;
+            resolvedCustomerId;
         }
 
-        if (
-          data.subscriptionId
-        ) {
+        if (resolvedSubscriptionId) {
           subscription.providerSubscriptionId =
-            data.subscriptionId;
+            resolvedSubscriptionId;
         }
 
-        if (
-          data.billingCycle
-        ) {
+        if (resolvedBillingCycle) {
           subscription.billingCycle =
-            data.billingCycle;
+            resolvedBillingCycle;
         }
 
-        if (
-          data.periodStart
-        ) {
+        if (data.periodStart) {
           subscription.currentPeriodStart =
             new Date(
               data.periodStart
             );
         }
 
-        if (
-          data.periodEnd
-        ) {
+        if (data.periodEnd) {
           subscription.currentPeriodEnd =
             new Date(
               data.periodEnd
@@ -1705,8 +2009,7 @@ async function processWebhookEvent({
 
         if (data.metadata) {
           subscription.metadata = {
-            ...(subscription.metadata ||
-              {}),
+            ...(subscription.metadata || {}),
             ...data.metadata
           };
         }
@@ -1715,11 +2018,11 @@ async function processWebhookEvent({
       }
     }
 
-    /**
-     * ==========================================================
-     * SUBSCRIPTION_CANCELED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | SUBSCRIPTION_CANCELED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1727,26 +2030,24 @@ async function processWebhookEvent({
     ) {
       let subscription = null;
 
-      if (
-        data.subscriptionId
-      ) {
+      if (resolvedSubscriptionId) {
         subscription =
           await Subscription.findOne({
             provider,
             providerSubscriptionId:
-              data.subscriptionId
+              resolvedSubscriptionId
           });
       }
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await Subscription.findOne({
             provider,
             providerCustomerId:
-              data.customerId
+              resolvedCustomerId
           });
       }
 
@@ -1771,11 +2072,11 @@ async function processWebhookEvent({
       }
     }
 
-    /**
-     * ==========================================================
-     * INVOICE_PAID
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | INVOICE_PAID
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1783,43 +2084,36 @@ async function processWebhookEvent({
     ) {
       let subscription = null;
 
-      /**
-       * محاولة أولى بواسطة Provider Subscription ID.
-       */
-
-      if (
-        data.subscriptionId
-      ) {
+      if (resolvedSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            data.subscriptionId
+            resolvedSubscriptionId
           );
       }
 
-      /**
-       * محاولة ثانية بواسطة Customer ID.
-       */
-
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            data.customerId
+            resolvedCustomerId
           );
       }
 
       const userId =
-        data.userId ||
+        resolvedUser?._id ||
+        resolvedUserId ||
         subscription?.user?._id ||
-        subscription?.user;
+        subscription?.user ||
+        null;
 
       const subscriptionId =
         subscription?._id ||
-        data.localSubscriptionId;
+        data.localSubscriptionId ||
+        null;
 
       if (
         userId &&
@@ -1829,10 +2123,13 @@ async function processWebhookEvent({
           userId,
           subscriptionId,
           providerInvoiceId:
-            data.invoiceId || "",
+            data.invoiceId ||
+            data.invoice_id ||
+            "",
           amount:
             Number(
-              data.amount || 0
+              data.amount ||
+              0
             ),
           currency:
             data.currency ||
@@ -1851,18 +2148,20 @@ async function processWebhookEvent({
               : null,
           status: "paid",
           invoiceUrl:
-            data.invoiceUrl || "",
+            data.invoiceUrl ||
+            data.invoice_url ||
+            "",
           metadata:
             data.metadata || {}
         });
       }
     }
 
-    /**
-     * ==========================================================
-     * INVOICE_PAYMENT_FAILED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | INVOICE_PAYMENT_FAILED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1870,38 +2169,26 @@ async function processWebhookEvent({
     ) {
       let subscription = null;
 
-      if (
-        data.subscriptionId
-      ) {
+      if (resolvedSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            data.subscriptionId
+            resolvedSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            data.customerId
+            resolvedCustomerId
           );
       }
 
       if (subscription) {
-        /**
-         * لا نحول الاشتراك مباشرة إلى canceled.
-         *
-         * Stripe قد يدخل subscription
-         * في past_due أولًا.
-         *
-         * لذلك نستخدم status القادم من Stripe
-         * إن كان موجودًا.
-         */
-
         if (data.status) {
           subscription.status =
             data.status;
@@ -1917,11 +2204,11 @@ async function processWebhookEvent({
       }
     }
 
-    /**
-     * ==========================================================
-     * INVOICE_FAILED
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | INVOICE_FAILED
+    |--------------------------------------------------------------------------
+    */
 
     if (
       event.normalizedType ===
@@ -1929,24 +2216,22 @@ async function processWebhookEvent({
     ) {
       let subscription = null;
 
-      if (
-        data.subscriptionId
-      ) {
+      if (resolvedSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            data.subscriptionId
+            resolvedSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        data.customerId
+        resolvedCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            data.customerId
+            resolvedCustomerId
           );
       }
 
@@ -1963,20 +2248,16 @@ async function processWebhookEvent({
       }
     }
 
-    /**
-     * ==========================================================
-     * تسجيل نجاح المعالجة
-     * ==========================================================
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | تسجيل نجاح المعالجة
+    |--------------------------------------------------------------------------
+    */
 
-    eventRecord.processed =
-      true;
-
+    eventRecord.processed = true;
     eventRecord.processedAt =
       new Date();
-
-    eventRecord.processingError =
-      "";
+    eventRecord.processingError = "";
 
     await eventRecord.save();
 
@@ -1985,7 +2266,7 @@ async function processWebhookEvent({
     };
   } catch (error) {
     eventRecord.processingError =
-      error.message ||
+      error?.message ||
       "Webhook processing failed";
 
     await eventRecord.save();
@@ -1993,6 +2274,8 @@ async function processWebhookEvent({
     throw error;
   }
 }
+
+
 
 module.exports = {
   getFreePlan,
