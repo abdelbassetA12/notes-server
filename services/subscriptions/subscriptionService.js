@@ -3,7 +3,9 @@ const Subscription =
 
 const SubscriptionPlan =
   require("../../models/SubscriptionPlan");
-  const User = require("../../models/User");
+
+const User =
+  require("../../models/User");
 
 const Payment =
   require("../../models/Payment");
@@ -18,42 +20,25 @@ const {
   getProvider
 } = require("../payments/providerManager");
 
-/**
- * |--------------------------------------------------------------------------
- * أدوات التاريخ
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| أدوات التاريخ
+|--------------------------------------------------------------------------
+*/
 
 function addMonths(date, months) {
   const result = new Date(date);
-
-  result.setMonth(
-    result.getMonth() + months
-  );
-
+  result.setMonth(result.getMonth() + months);
   return result;
 }
 
 function addYears(date, years) {
   const result = new Date(date);
-
-  result.setFullYear(
-    result.getFullYear() + years
-  );
-
+  result.setFullYear(result.getFullYear() + years);
   return result;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * حساب نهاية الفترة
- * |--------------------------------------------------------------------------
- */
-
-function calculatePeriodEnd(
-  start,
-  billingCycle
-) {
+function calculatePeriodEnd(start, billingCycle) {
   if (billingCycle === "monthly") {
     return addMonths(start, 1);
   }
@@ -65,11 +50,298 @@ function calculatePeriodEnd(
   return null;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * الحصول على Free Plan
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| أدوات مساعدة للـ Webhooks
+|--------------------------------------------------------------------------
+*/
+
+function getNested(object, paths = []) {
+  for (const path of paths) {
+    const parts = path.split(".");
+    let value = object;
+
+    for (const part of parts) {
+      if (
+        value === null ||
+        value === undefined
+      ) {
+        value = undefined;
+        break;
+      }
+
+      value = value[part];
+    }
+
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function normalizeId(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (
+    typeof value === "object" &&
+    value._id
+  ) {
+    return value._id;
+  }
+
+  if (
+    typeof value === "object" &&
+    value.id
+  ) {
+    return value.id;
+  }
+
+  return value;
+}
+
+function getCustomData(data) {
+  const customData =
+    data?.customData ||
+    data?.custom_data ||
+    data?.metadata?.customData ||
+    data?.metadata?.custom_data ||
+    {};
+
+  return customData || {};
+}
+
+function getMetadata(data) {
+  return (
+    data?.metadata ||
+    {}
+  );
+}
+
+function getWebhookUserId(data) {
+  const customData =
+    getCustomData(data);
+
+  const metadata =
+    getMetadata(data);
+
+  return normalizeId(
+    getNested(data, [
+      "userId",
+      "user_id"
+    ]) ||
+    getNested(customData, [
+      "userId",
+      "user_id",
+      "qevoraUserId",
+      "qevora_user_id"
+    ]) ||
+    getNested(metadata, [
+      "userId",
+      "user_id",
+      "qevoraUserId",
+      "qevora_user_id"
+    ])
+  );
+}
+
+function getWebhookCustomerId(data) {
+  return (
+    getNested(data, [
+      "customerId",
+      "customer_id",
+      "customer.id"
+    ]) ||
+    null
+  );
+}
+
+function getWebhookSubscriptionId(data) {
+  return (
+    getNested(data, [
+      "subscriptionId",
+      "subscription_id",
+      "subscription.id"
+    ]) ||
+    null
+  );
+}
+
+function getWebhookPriceId(data) {
+  const customData =
+    getCustomData(data);
+
+  const metadata =
+    getMetadata(data);
+
+  return (
+    getNested(data, [
+      "priceId",
+      "price_id",
+      "price.id",
+      "items.0.priceId",
+      "items.0.price_id",
+      "items.0.price.id",
+      "items.0.price.priceId",
+      "subscription.items.0.priceId",
+      "subscription.items.0.price_id",
+      "subscription.items.0.price.id",
+      "subscription.items.0.price.priceId"
+    ]) ||
+    getNested(customData, [
+      "priceId",
+      "price_id",
+      "paddlePriceId",
+      "paddle_price_id"
+    ]) ||
+    getNested(metadata, [
+      "priceId",
+      "price_id",
+      "paddlePriceId",
+      "paddle_price_id"
+    ]) ||
+    null
+  );
+}
+
+function getWebhookPlanId(data) {
+  const customData =
+    getCustomData(data);
+
+  const metadata =
+    getMetadata(data);
+
+  return normalizeId(
+    getNested(data, [
+      "planId",
+      "plan_id"
+    ]) ||
+    getNested(customData, [
+      "planId",
+      "plan_id"
+    ]) ||
+    getNested(metadata, [
+      "planId",
+      "plan_id"
+    ])
+  );
+}
+
+function getWebhookBillingCycle(data) {
+  const customData =
+    getCustomData(data);
+
+  const metadata =
+    getMetadata(data);
+
+  const value =
+    getNested(data, [
+      "billingCycle",
+      "billing_cycle"
+    ]) ||
+    getNested(customData, [
+      "billingCycle",
+      "billing_cycle"
+    ]) ||
+    getNested(metadata, [
+      "billingCycle",
+      "billing_cycle"
+    ]);
+
+  if (
+    value === "yearly" ||
+    value === "annual"
+  ) {
+    return "yearly";
+  }
+
+  if (value === "lifetime") {
+    return "lifetime";
+  }
+
+  return "monthly";
+}
+
+function getWebhookPeriodStart(data) {
+  const value = getNested(data, [
+    "periodStart",
+    "period_start",
+    "currentPeriodStart",
+    "current_period_start",
+    "subscription.currentPeriodStart",
+    "subscription.current_period_start"
+  ]);
+
+  if (!value) {
+    return new Date();
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? new Date()
+    : date;
+}
+
+function getWebhookPeriodEnd(data, billingCycle) {
+  const value = getNested(data, [
+    "periodEnd",
+    "period_end",
+    "currentPeriodEnd",
+    "current_period_end",
+    "subscription.currentPeriodEnd",
+    "subscription.current_period_end"
+  ]);
+
+  if (value) {
+    const date = new Date(value);
+
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+
+  return calculatePeriodEnd(
+    new Date(),
+    billingCycle
+  );
+}
+
+function getWebhookStatus(data) {
+  const status =
+    getNested(data, [
+      "status",
+      "subscription.status"
+    ]) || "active";
+
+  const allowed = [
+    "active",
+    "trialing",
+    "past_due",
+    "paused",
+    "canceled",
+    "expired"
+  ];
+
+  if (allowed.includes(status)) {
+    return status;
+  }
+
+  return "active";
+}
+
+/*
+|--------------------------------------------------------------------------
+| الحصول على Free Plan
+|--------------------------------------------------------------------------
+*/
 
 async function getFreePlan() {
   const plan =
@@ -87,11 +359,11 @@ async function getFreePlan() {
   return plan;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * الحصول على خطة بواسطة ID
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| الحصول على خطة بواسطة ID
+|--------------------------------------------------------------------------
+*/
 
 async function getPlanById(planId) {
   if (!planId) {
@@ -115,11 +387,11 @@ async function getPlanById(planId) {
   return plan;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * الحصول على اشتراك المستخدم
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| الحصول على اشتراك المستخدم
+|--------------------------------------------------------------------------
+*/
 
 async function getUserSubscription(userId) {
   if (!userId) {
@@ -143,11 +415,11 @@ async function getUserSubscription(userId) {
     );
 }
 
-/**
- * |--------------------------------------------------------------------------
- * البحث عن الاشتراك بواسطة Provider Subscription ID
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| البحث عن الاشتراك بواسطة Provider Subscription ID
+|--------------------------------------------------------------------------
+*/
 
 async function getSubscriptionByProviderId(
   provider,
@@ -166,11 +438,11 @@ async function getSubscriptionByProviderId(
   }).populate("plan");
 }
 
-/**
- * |--------------------------------------------------------------------------
- * البحث عن الاشتراك بواسطة Provider Customer ID
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| البحث عن الاشتراك بواسطة Provider Customer ID
+|--------------------------------------------------------------------------
+*/
 
 async function getSubscriptionByCustomerId(
   provider,
@@ -189,15 +461,19 @@ async function getSubscriptionByCustomerId(
   }).populate("plan");
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إنشاء اشتراك Free تلقائيًا
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إنشاء اشتراك Free تلقائيًا
+|--------------------------------------------------------------------------
+*/
 
-async function ensureFreeSubscription(
-  userId
-) {
+async function ensureFreeSubscription(userId) {
+  if (!userId) {
+    throw new Error(
+      "User ID is required."
+    );
+  }
+
   const existing =
     await getUserSubscription(userId);
 
@@ -220,7 +496,9 @@ async function ensureFreeSubscription(
       currentPeriodStart: now,
       currentPeriodEnd: null,
       startedAt: now,
-      cancelAtPeriodEnd: false
+      cancelAtPeriodEnd: false,
+      providerCustomerId: "",
+      providerSubscriptionId: ""
     });
 
   return Subscription.findById(
@@ -228,32 +506,35 @@ async function ensureFreeSubscription(
   ).populate("plan");
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إنشاء Checkout
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إنشاء Checkout
+|--------------------------------------------------------------------------
+*/
 
- 
 async function createCheckout({
   user,
   planId,
   billingCycle
 }) {
-  const userId = user?._id || user?.id;
+  const userId =
+    user?._id ||
+    user?.id;
 
   if (!userId) {
     throw new Error(
       "Authenticated user is required."
     );
   }
-  const dbUser = await User.findById(userId);
 
-if (!dbUser) {
-  throw new Error(
-    "User account not found."
-  );
-}
+  const dbUser =
+    await User.findById(userId);
+
+  if (!dbUser) {
+    throw new Error(
+      "User account not found."
+    );
+  }
 
   const plan =
     await getPlanById(planId);
@@ -270,15 +551,15 @@ if (!dbUser) {
     );
   }
 
-  // ============================================================
-  // الخطة المجانية
-  // ============================================================
+  /*
+  |--------------------------------------------------------------------------
+  | Free plan
+  |--------------------------------------------------------------------------
+  */
 
   if (plan.isFree) {
     const existing =
-      await getUserSubscription(
-        userId
-      );
+      await getUserSubscription(userId);
 
     if (
       existing &&
@@ -310,7 +591,9 @@ if (!dbUser) {
         currentPeriodStart: now,
         currentPeriodEnd: null,
         startedAt: now,
-        cancelAtPeriodEnd: false
+        cancelAtPeriodEnd: false,
+        providerCustomerId: "",
+        providerSubscriptionId: ""
       });
 
     return {
@@ -322,9 +605,11 @@ if (!dbUser) {
     };
   }
 
-  // ============================================================
-  // الخطط المدفوعة
-  // ============================================================
+  /*
+  |--------------------------------------------------------------------------
+  | Paid plans
+  |--------------------------------------------------------------------------
+  */
 
   if (billingCycle === "lifetime") {
     throw new Error(
@@ -336,42 +621,47 @@ if (!dbUser) {
     process.env.PAYMENT_PROVIDER ||
     "internal";
 
-  const provider =
-    getProvider(providerName);
-
-  // ============================================================
-  // Provider داخلي لا يدعم الخطط المدفوعة
-  // ============================================================
-
   if (providerName === "internal") {
     throw new Error(
       "Paid plans require an external payment provider."
     );
   }
 
-  const existing =
-    await getUserSubscription(
-      userId
-    );
+  const provider =
+    getProvider(providerName);
 
-  // ============================================================
-  // إعادة استخدام Customer ID إن وجد
-  // ============================================================
+  if (!provider) {
+    throw new Error(
+      `Payment provider "${providerName}" is not available.`
+    );
+  }
+
+  const existing =
+    await getUserSubscription(userId);
+
+  /*
+  |--------------------------------------------------------------------------
+  | إعادة استخدام Paddle Customer ID
+  |--------------------------------------------------------------------------
+  */
 
   let customerId =
     existing?.provider === providerName
       ? existing.providerCustomerId || ""
       : "";
 
-  // ============================================================
-  // إنشاء Customer جديد
-  // ============================================================
+  /*
+  |--------------------------------------------------------------------------
+  | إنشاء Customer لدى Paddle
+  |--------------------------------------------------------------------------
+  */
+
+  let customer = null;
 
   if (!customerId) {
-    const customer =
+    customer =
       await provider.createCustomer(
-        //user
-         dbUser
+        dbUser
       );
 
     customerId =
@@ -384,15 +674,21 @@ if (!dbUser) {
         "Payment provider did not return a customer ID."
       );
     }
+  } else {
+    customer = {
+      id: customerId
+    };
   }
 
-  // ============================================================
-  // إنشاء Checkout
-  // ============================================================
+  /*
+  |--------------------------------------------------------------------------
+  | إنشاء Checkout
+  |--------------------------------------------------------------------------
+  */
 
   const checkout =
     await provider.createCheckout({
-      user,
+      user: dbUser,
       plan,
       billingCycle,
       customer: {
@@ -408,12 +704,21 @@ if (!dbUser) {
 
   return {
     type: "checkout_created",
+
     checkoutUrl:
       checkout.checkoutUrl ||
       checkout.url ||
       null,
+
+    transactionId:
+      checkout.transactionId ||
+      checkout.transaction?.id ||
+      null,
+
     provider: providerName,
+
     customerId,
+
     plan: {
       id: plan._id,
       name: plan.name,
@@ -421,194 +726,12 @@ if (!dbUser) {
     }
   };
 }
- 
 
- /*
-async function createCheckout({
-  user,
-  planId,
-  billingCycle
-}) {
-  if (!user || !user._id) {
-    throw new Error(
-      "Authenticated user is required."
-    );
-  }
-  
-
-  const plan =
-    await getPlanById(planId);
-
-  if (
-    ![
-      "monthly",
-      "yearly",
-      "lifetime"
-    ].includes(billingCycle)
-  ) {
-    throw new Error(
-      "Invalid billing cycle."
-    );
-  }
-
- 
-  // الخطة المجانية
-  
-
-  if (plan.isFree) {
-    const existing =
-      await getUserSubscription(
-        user._id
-        
-      );
-
-    if (
-      existing &&
-      existing.plan &&
-      existing.plan._id.toString() ===
-        plan._id.toString()
-    ) {
-      return {
-        type: "already_active",
-        subscription: existing
-      };
-    }
-
-    if (existing) {
-      throw new Error(
-        "User already has an active subscription."
-      );
-    }
-
-    const now = new Date();
-
-    const subscription =
-      await Subscription.create({
-        user: user._id,
-        plan: plan._id,
-        status: "active",
-        provider: "internal",
-        billingCycle: "lifetime",
-        currentPeriodStart: now,
-        currentPeriodEnd: null,
-        startedAt: now,
-        cancelAtPeriodEnd: false
-      });
-
-    return {
-      type: "subscription_created",
-      subscription:
-        await Subscription.findById(
-          subscription._id
-        ).populate("plan")
-    };
-  }
-
-    //الخطط المدفوعة
-  
-
-  if (billingCycle === "lifetime") {
-    throw new Error(
-      "Lifetime billing is only available for free plans."
-    );
-  }
-
-  const providerName =
-    process.env.PAYMENT_PROVIDER ||
-    "internal";
-
-  const provider =
-    getProvider(providerName);
- 
-    //إذا كان Provider داخليًا،
-   // فإن الخطط المدفوعة غير مدعومة.
-    
-
-  if (providerName === "internal") {
-    throw new Error(
-      "Paid plans require an external payment provider."
-    );
-  }
-
-  const existing =
-    await getUserSubscription(
-      user._id
-    );
-
-  // إذا كان لدينا Customer ID سابقًا
- // نعيد استخدامه.
-  
-
-  let customerId =
-    existing?.provider === providerName
-      ? existing.providerCustomerId || ""
-      : "";
-
-  // إذا لم يكن لدينا Customer،
-  // ننشئ Customer جديدًا لدى Provider.
-   
-
-  if (!customerId) {
-    const customer =
-      await provider.createCustomer(
-        user
-      );
-
-    customerId =
-      customer?.providerCustomerId ||
-      customer?.id ||
-      "";
-
-    if (!customerId) {
-      throw new Error(
-        "Payment provider did not return a customer ID."
-      );
-    }
-  }
-
-  const checkout =
-    await provider.createCheckout({
-      user,
-      plan,
-      billingCycle,
-      customer: {
-        id: customerId
-      }
-    });
-
-  if (!checkout) {
-    throw new Error(
-      "Payment provider did not return checkout data."
-    );
-  }
-
-  return {
-    type: "checkout_created",
-
-    checkoutUrl:
-      checkout.checkoutUrl ||
-      checkout.url ||
-      null,
-
-    provider: providerName,
-
-    customerId,
-
-    plan: {
-      id: plan._id,
-      name: plan.name,
-      slug: plan.slug
-    }
-  };
-}*/
-
-/**
- * |--------------------------------------------------------------------------
- * تفعيل اشتراك
- * |--------------------------------------------------------------------------
- *
- * تستخدم داخليًا أو بواسطة Webhook.
- */
+/*
+|--------------------------------------------------------------------------
+| تفعيل اشتراك
+|--------------------------------------------------------------------------
+*/
 
 async function activateSubscription({
   userId,
@@ -637,22 +760,15 @@ async function activateSubscription({
   const plan =
     await getPlanById(planId);
 
-  /**
-   * أولًا نحاول العثور على اشتراك نشط
-   * للمستخدم.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | أولًا: اشتراك مطابق لـ Provider Subscription ID
+  |--------------------------------------------------------------------------
+  */
 
-  let subscription =
-    await getUserSubscription(userId);
-
-  /**
-   * إذا لم يوجد اشتراك نشط،
-   * قد يكون لدينا اشتراك قديم بنفس
-   * Provider Subscription ID.
-   */
+  let subscription = null;
 
   if (
-    !subscription &&
     providerSubscriptionId
   ) {
     subscription =
@@ -662,19 +778,58 @@ async function activateSubscription({
       });
   }
 
-  /**
-   * تحديث الاشتراك الموجود.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | ثانيًا: اشتراك مطابق للـ Customer ID
+  |--------------------------------------------------------------------------
+  */
+
+  if (
+    !subscription &&
+    providerCustomerId
+  ) {
+    subscription =
+      await Subscription.findOne({
+        provider,
+        providerCustomerId
+      });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | ثالثًا: اشتراك المستخدم الحالي
+  |
+  | هذا مهم جدًا:
+  | المستخدم الجديد غالبًا لديه Free/Internal subscription.
+  | عند نجاح Paddle نحدّثه إلى Paddle بدل إنشاء اشتراك ثاني.
+  |--------------------------------------------------------------------------
+  */
+
+  if (!subscription) {
+    subscription =
+      await Subscription.findOne({
+        user: userId,
+        status: {
+          $in: [
+            "active",
+            "trialing",
+            "past_due"
+          ]
+        }
+      });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | تحديث الاشتراك الموجود
+  |--------------------------------------------------------------------------
+  */
 
   if (subscription) {
-    subscription.plan =
-      plan._id;
-
-    subscription.status =
-      status;
-
-    subscription.provider =
-      provider;
+    subscription.user = userId;
+    subscription.plan = plan._id;
+    subscription.status = status;
+    subscription.provider = provider;
 
     if (providerCustomerId) {
       subscription.providerCustomerId =
@@ -698,17 +853,24 @@ async function activateSubscription({
     subscription.cancelAtPeriodEnd =
       false;
 
-    subscription.canceledAt =
-      null;
+    subscription.canceledAt = null;
+    subscription.endedAt = null;
 
-    subscription.endedAt =
-      null;
+    subscription.startedAt =
+      subscription.startedAt ||
+      new Date();
 
     subscription.metadata =
       metadata || {};
 
     await subscription.save();
   } else {
+    /*
+    |--------------------------------------------------------------------------
+    | لا يوجد اشتراك محلي -> إنشاء واحد جديد
+    |--------------------------------------------------------------------------
+    */
+
     subscription =
       await Subscription.create({
         user: userId,
@@ -731,56 +893,38 @@ async function activateSubscription({
   ).populate("plan");
 }
 
-/**
- * |--------------------------------------------------------------------------
- * تغيير الخطة
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| تغيير الخطة
+|--------------------------------------------------------------------------
+*/
+
 async function changePlan({
   user,
   newPlanId,
   billingCycle
 }) {
-  const userId = user?._id || user?.id;
+  const userId =
+    user?._id ||
+    user?.id;
 
   if (!userId) {
     throw new Error(
       "Authenticated user is required."
     );
   }
-  /*
-async function changePlan({
-  user,
-  newPlanId,
-  billingCycle
-}) {
-  if (!user || !user._id) {
-    throw new Error(
-      "Authenticated user is required."
-    );
-  }*/
 
   const newPlan =
-    await getPlanById(
-      newPlanId
-    );
-  const subscription =
-  await getUserSubscription(
-    userId
-  );
-  /*
-  const subscription =
-    await getUserSubscription(
-      user._id
-    );
-    */
+    await getPlanById(newPlanId);
 
-  /**
-   * لا يوجد اشتراك:
-   *
-   * Free => ينشأ مباشرة.
-   * Paid => Checkout.
-   */
+  const subscription =
+    await getUserSubscription(userId);
+
+  /*
+  |--------------------------------------------------------------------------
+  | لا يوجد اشتراك
+  |--------------------------------------------------------------------------
+  */
 
   if (!subscription) {
     if (newPlan.isFree) {
@@ -798,9 +942,11 @@ async function changePlan({
     });
   }
 
-  /**
-   * نفس الخطة.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | نفس الخطة
+  |--------------------------------------------------------------------------
+  */
 
   if (
     subscription.plan &&
@@ -813,19 +959,11 @@ async function changePlan({
     };
   }
 
-  /**
-   * ============================================================
-   * الانتقال إلى Free
-   * ============================================================
-   *
-   * مهم:
-   *
-   * لا نغير plan إلى Free الآن إذا كان
-   * الاشتراك المدفوع خارجيًا.
-   *
-   * Stripe سيبقي الاشتراك فعالًا حتى
-   * نهاية الفترة ثم يرسل Webhook.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | الانتقال إلى Free
+  |--------------------------------------------------------------------------
+  */
 
   if (newPlan.isFree) {
     if (
@@ -861,31 +999,24 @@ async function changePlan({
       };
     }
 
-    /**
-     * الاشتراك الداخلي Free/مدفوع
-     * لا يدعم تغيير الخطة المدفوعة مباشرة.
-     */
-
     throw new Error(
       "Internal provider does not support paid subscription changes."
     );
   }
 
-  /**
-   * ============================================================
-   * اشتراك مدفوع موجود لدى Provider خارجي
-   * ============================================================
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | اشتراك خارجي موجود
+  |--------------------------------------------------------------------------
+  */
 
   if (
     subscription.provider !==
     "internal"
   ) {
     if (
-      billingCycle !==
-        "monthly" &&
-      billingCycle !==
-        "yearly"
+      billingCycle !== "monthly" &&
+      billingCycle !== "yearly"
     ) {
       throw new Error(
         "Paid subscriptions require monthly or yearly billing."
@@ -912,8 +1043,7 @@ async function changePlan({
     subscription.cancelAtPeriodEnd =
       false;
 
-    subscription.canceledAt =
-      null;
+    subscription.canceledAt = null;
 
     await subscription.save();
 
@@ -926,12 +1056,11 @@ async function changePlan({
     };
   }
 
-  /**
-   * ============================================================
-   * المستخدم على Internal / Free
-   * ويريد خطة مدفوعة
-   * ============================================================
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | Internal / Free -> Paid
+  |--------------------------------------------------------------------------
+  */
 
   return createCheckout({
     user,
@@ -940,11 +1069,11 @@ async function changePlan({
   });
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إلغاء الاشتراك
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إلغاء الاشتراك
+|--------------------------------------------------------------------------
+*/
 
 async function cancelSubscription({
   userId,
@@ -961,9 +1090,11 @@ async function cancelSubscription({
     );
   }
 
-  /**
-   * الاشتراك الداخلي.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | Internal
+  |--------------------------------------------------------------------------
+  */
 
   if (
     subscription.provider ===
@@ -996,9 +1127,11 @@ async function cancelSubscription({
     };
   }
 
-  /**
-   * Provider خارجي.
-   */
+  /*
+  |--------------------------------------------------------------------------
+  | External Provider
+  |--------------------------------------------------------------------------
+  */
 
   const provider =
     getProvider(
@@ -1036,16 +1169,15 @@ async function cancelSubscription({
     type: immediately
       ? "canceled"
       : "cancellation_scheduled",
-
     subscription
   };
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إعادة تفعيل الاشتراك
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إعادة تفعيل الاشتراك
+|--------------------------------------------------------------------------
+*/
 
 async function reactivateSubscription(
   userId
@@ -1092,28 +1224,30 @@ async function reactivateSubscription(
   ).populate("plan");
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إنشاء رقم فاتورة
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إنشاء رقم فاتورة
+|--------------------------------------------------------------------------
+*/
 
 async function generateInvoiceNumber() {
   const count =
     await Invoice.countDocuments();
 
   const number =
-    String(count + 1)
-      .padStart(6, "0");
+    String(count + 1).padStart(
+      6,
+      "0"
+    );
 
   return `INV-${number}`;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * تسجيل Payment
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| تسجيل Payment
+|--------------------------------------------------------------------------
+*/
 
 async function recordPayment({
   userId,
@@ -1139,11 +1273,6 @@ async function recordPayment({
     );
   }
 
-  /**
-   * إذا كان Provider أعطانا Payment ID،
-   * نستخدمه لمنع التكرار.
-   */
-
   if (providerPaymentId) {
     const existing =
       await Payment.findOne({
@@ -1163,9 +1292,9 @@ async function recordPayment({
     providerPaymentId:
       providerPaymentId || "",
     amount: Number(amount || 0),
-    currency:
-      String(currency || "USD")
-        .toUpperCase(),
+    currency: String(
+      currency || "USD"
+    ).toUpperCase(),
     status,
     type,
     paidAt:
@@ -1176,11 +1305,11 @@ async function recordPayment({
   });
 }
 
-/**
- * |--------------------------------------------------------------------------
- * إنشاء Invoice
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إنشاء Invoice
+|--------------------------------------------------------------------------
+*/
 
 async function createInvoice({
   userId,
@@ -1206,10 +1335,6 @@ async function createInvoice({
     );
   }
 
-  /**
-   * منع تكرار Invoice من Provider.
-   */
-
   if (providerInvoiceId) {
     const existing =
       await Invoice.findOne({
@@ -1231,9 +1356,9 @@ async function createInvoice({
     providerInvoiceId:
       providerInvoiceId || "",
     amount: Number(amount || 0),
-    currency:
-      String(currency || "USD")
-        .toUpperCase(),
+    currency: String(
+      currency || "USD"
+    ).toUpperCase(),
     status,
     periodStart,
     periodEnd,
@@ -1247,11 +1372,11 @@ async function createInvoice({
   });
 }
 
-/**
- * |--------------------------------------------------------------------------
- * تحديث Payment الموجود
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| تحديث Payment الموجود
+|--------------------------------------------------------------------------
+*/
 
 async function updatePaymentStatus({
   provider,
@@ -1259,9 +1384,7 @@ async function updatePaymentStatus({
   status,
   metadata = {}
 }) {
-  if (
-    !providerPaymentId
-  ) {
+  if (!providerPaymentId) {
     return null;
   }
 
@@ -1275,23 +1398,12 @@ async function updatePaymentStatus({
     return null;
   }
 
-  payment.status =
-    status;
+  payment.status = status;
 
-  if (
-    status === "paid"
-  ) {
+  if (status === "paid") {
     payment.paidAt =
       payment.paidAt ||
       new Date();
-  }
-
-  if (
-    status === "refunded"
-  ) {
-    payment.paidAt =
-      payment.paidAt ||
-      null;
   }
 
   payment.metadata = {
@@ -1304,34 +1416,148 @@ async function updatePaymentStatus({
   return payment;
 }
 
-/**
- * |--------------------------------------------------------------------------
- * معالجة Webhook موحد
- * |--------------------------------------------------------------------------
- */
+/*
+|--------------------------------------------------------------------------
+| إيجاد المستخدم بواسطة Paddle Customer ID
+|--------------------------------------------------------------------------
+*/
+
+async function findUserByProviderCustomerId(
+  customerId
+) {
+  if (!customerId) {
+    return null;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | أولًا نحاول من الاشتراك المحلي
+  |--------------------------------------------------------------------------
+  */
+
+  const localSubscription =
+    await Subscription.findOne({
+      provider: "paddle",
+      providerCustomerId: customerId
+    }).populate("user");
+
+  if (
+    localSubscription &&
+    localSubscription.user
+  ) {
+    return localSubscription.user;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | ثم User fields المعروفة
+  |--------------------------------------------------------------------------
+  */
+
+  const user =
+    await User.findOne({
+      $or: [
+        {
+          paddleCustomerId:
+            customerId
+        },
+        {
+          "payment.paddleCustomerId":
+            customerId
+        },
+        {
+          "billing.paddleCustomerId":
+            customerId
+        }
+      ]
+    });
+
+  return user || null;
+}
+
+/*
+|--------------------------------------------------------------------------
+| إيجاد الخطة بواسطة Paddle Price ID
+|--------------------------------------------------------------------------
+|
+| نستخدمها فقط إذا لم تصل planId في custom_data.
+| نقارن تمثيل الخطة كاملًا حتى لا نعتمد على اسم حقل
+| غير معروف داخل SubscriptionPlan.
+|--------------------------------------------------------------------------
+*/
+
+async function findPlanByProviderPriceId(
+  priceId
+) {
+  if (!priceId) {
+    return null;
+  }
+
+  const plans =
+    await SubscriptionPlan.find({
+      active: true
+    });
+
+  for (const plan of plans) {
+    const serialized =
+      JSON.stringify(plan);
+
+    if (
+      serialized.includes(
+        String(priceId)
+      )
+    ) {
+      return plan;
+    }
+  }
+
+  return null;
+}
+
+/*
+|--------------------------------------------------------------------------
+| معالجة Webhook موحد
+|--------------------------------------------------------------------------
+*/
+
 async function processWebhookEvent({
   provider,
   event
 }) {
   if (!provider) {
-    throw new Error("Webhook provider is required.");
+    throw new Error(
+      "Webhook provider is required."
+    );
   }
 
   if (!event) {
-    throw new Error("Webhook event is required.");
+    throw new Error(
+      "Webhook event is required."
+    );
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | حماية من التكرار
+  |--------------------------------------------------------------------------
+  */
 
   let eventRecord;
 
   try {
-    eventRecord = await SubscriptionEvent.create({
-      provider,
-      providerEventId: event.providerEventId,
-      eventType: event.eventType,
-      normalizedType: event.normalizedType,
-      data: event.data || {},
-      processed: false
-    });
+    eventRecord =
+      await SubscriptionEvent.create({
+        provider,
+        providerEventId:
+          event.providerEventId,
+        eventType:
+          event.eventType,
+        normalizedType:
+          event.normalizedType,
+        data:
+          event.data || {},
+        processed: false
+      });
   } catch (error) {
     if (error.code === 11000) {
       return {
@@ -1344,272 +1570,8 @@ async function processWebhookEvent({
   }
 
   try {
-    const data = event.data || {};
-
-    /*
-    |--------------------------------------------------------------------------
-    | Helpers
-    |--------------------------------------------------------------------------
-    */
-
-    const getNested = (object, paths = []) => {
-      for (const path of paths) {
-        const parts = path.split(".");
-        let value = object;
-
-        for (const part of parts) {
-          if (
-            value === null ||
-            value === undefined ||
-            typeof value !== "object"
-          ) {
-            value = undefined;
-            break;
-          }
-
-          value = value[part];
-        }
-
-        if (
-          value !== undefined &&
-          value !== null &&
-          value !== ""
-        ) {
-          return value;
-        }
-      }
-
-      return null;
-    };
-
-    const customData =
-      data.customData ||
-      data.custom_data ||
-      data.metadata?.customData ||
-      data.metadata?.custom_data ||
-      {};
-
-    const metadata =
-      data.metadata ||
-      {};
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج User ID
-    |--------------------------------------------------------------------------
-    */
-
-    const resolvedUserId =
-      data.userId ||
-      data.user_id ||
-      customData.userId ||
-      customData.user_id ||
-      customData.qevoraUserId ||
-      customData.qevora_user_id ||
-      metadata.userId ||
-      metadata.user_id ||
-      metadata.qevoraUserId ||
-      metadata.qevora_user_id ||
-      null;
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج Paddle Customer ID
-    |--------------------------------------------------------------------------
-    */
-
-    const resolvedCustomerId =
-      data.customerId ||
-      data.customer_id ||
-      data.customer?.id ||
-      null;
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج Paddle Subscription ID
-    |--------------------------------------------------------------------------
-    */
-
-    const resolvedSubscriptionId =
-      data.subscriptionId ||
-      data.subscription_id ||
-      data.subscription?.id ||
-      null;
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج Price ID
-    |--------------------------------------------------------------------------
-    */
-
-    const resolvedPriceId =
-      data.priceId ||
-      data.price_id ||
-      data.items?.[0]?.priceId ||
-      data.items?.[0]?.price_id ||
-      data.items?.[0]?.price?.id ||
-      data.items?.[0]?.price?.priceId ||
-      data.subscription?.items?.[0]?.priceId ||
-      data.subscription?.items?.[0]?.price_id ||
-      data.subscription?.items?.[0]?.price?.id ||
-      customData.priceId ||
-      customData.price_id ||
-      metadata.priceId ||
-      metadata.price_id ||
-      null;
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج Plan ID
-    |--------------------------------------------------------------------------
-    */
-
-    let resolvedPlanId =
-      data.planId ||
-      data.plan_id ||
-      customData.planId ||
-      customData.plan_id ||
-      metadata.planId ||
-      metadata.plan_id ||
-      null;
-
-    /*
-    |--------------------------------------------------------------------------
-    | استخراج Billing Cycle
-    |--------------------------------------------------------------------------
-    */
-
-    const resolvedBillingCycle =
-      data.billingCycle ||
-      data.billing_cycle ||
-      customData.billingCycle ||
-      customData.billing_cycle ||
-      metadata.billingCycle ||
-      metadata.billing_cycle ||
-      (
-        data.billingPeriod === "year"
-          ? "yearly"
-          : data.billingPeriod === "month"
-            ? "monthly"
-            : null
-      ) ||
-      "monthly";
-
-    /*
-    |--------------------------------------------------------------------------
-    | البحث عن User من Customer ID إذا لم نجد userId مباشرة
-    |--------------------------------------------------------------------------
-    */
-
-    let resolvedUser = null;
-
-    if (resolvedUserId) {
-      resolvedUser = await User.findById(resolvedUserId);
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | إذا كان لدينا اشتراك محلي سابق، نستخرج منه User
-    |--------------------------------------------------------------------------
-    */
-
-    let localSubscription = null;
-
-    if (resolvedSubscriptionId) {
-      localSubscription =
-        await getSubscriptionByProviderId(
-          provider,
-          resolvedSubscriptionId
-        );
-    }
-
-    if (!localSubscription && resolvedCustomerId) {
-      localSubscription =
-        await getSubscriptionByCustomerId(
-          provider,
-          resolvedCustomerId
-        );
-    }
-
-    if (!resolvedUser && localSubscription) {
-      resolvedUser =
-        await User.findById(localSubscription.user);
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | محاولة العثور على User بواسطة Customer ID
-    |--------------------------------------------------------------------------
-    |
-    | نبحث في الحقول المحتملة دون افتراض أن كل نسخة من User
-    | تحتوي على نفس الحقل.
-    |
-    */
-
-    if (!resolvedUser && resolvedCustomerId) {
-      resolvedUser = await User.findOne({
-        $or: [
-          {
-            paddleCustomerId: resolvedCustomerId
-          },
-          {
-            "payment.paddleCustomerId":
-              resolvedCustomerId
-          },
-          {
-            "billing.paddleCustomerId":
-              resolvedCustomerId
-          }
-        ]
-      });
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | إذا لم يكن لدينا Plan ID، نحاول استخراجه من Price ID
-    |--------------------------------------------------------------------------
-    |
-    | هذا مهم جدًا مع Paddle.
-    |
-    | Paddle يعطي Price ID بينما التطبيق يحتاج MongoDB
-    | SubscriptionPlan._id.
-    |
-    */
-
-    if (!resolvedPlanId && resolvedPriceId) {
-      const plans = await SubscriptionPlan.find({
-        active: true
-      }).lean();
-
-      for (const candidatePlan of plans) {
-        const json =
-          JSON.stringify(candidatePlan);
-
-        if (
-          json.includes(String(resolvedPriceId))
-        ) {
-          resolvedPlanId =
-            candidatePlan._id;
-          break;
-        }
-      }
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | إذا وجدنا اشتراكًا محليًا قديمًا، نستخدم خطته
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      !resolvedPlanId &&
-      localSubscription
-    ) {
-      resolvedPlanId =
-        localSubscription.plan?._id ||
-        localSubscription.plan ||
-        null;
-    }
+    const data =
+      event.data || {};
 
     /*
     |--------------------------------------------------------------------------
@@ -1621,39 +1583,45 @@ async function processWebhookEvent({
       event.normalizedType ===
       "PAYMENT_SUCCEEDED"
     ) {
-      let subscription =
-        localSubscription;
+      let subscription = null;
 
-      if (!subscription && resolvedSubscriptionId) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
+      if (providerSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            resolvedSubscriptionId
+            providerSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            resolvedCustomerId
+            providerCustomerId
           );
       }
 
       const userId =
-        resolvedUser?._id ||
-        resolvedUserId ||
+        getWebhookUserId(data) ||
         subscription?.user?._id ||
-        subscription?.user ||
-        null;
+        subscription?.user;
 
       const subscriptionId =
         subscription?._id ||
-        data.localSubscriptionId ||
-        null;
+        data.localSubscriptionId;
 
       if (
         userId &&
@@ -1671,28 +1639,18 @@ async function processWebhookEvent({
             "",
           amount:
             Number(
-              data.amount ||
-              data.total ||
-              data.details?.totals?.grandTotal ||
-              0
+              data.amount || 0
             ),
           currency:
             data.currency ||
-            data.currencyCode ||
             "USD",
           type:
             data.type ||
             "subscription",
           status: "paid",
-          metadata: {
-            ...(data.metadata || {}),
-            priceId:
-              resolvedPriceId || "",
-            customerId:
-              resolvedCustomerId || "",
-            subscriptionId:
-              resolvedSubscriptionId || ""
-          }
+          metadata:
+            data.metadata ||
+            {}
         });
       }
     }
@@ -1762,152 +1720,273 @@ async function processWebhookEvent({
     |--------------------------------------------------------------------------
     | SUBSCRIPTION_CREATED
     |--------------------------------------------------------------------------
+    |
+    | هذه أهم نقطة في الإصلاح.
+    |
+    | لا نسمح أبدًا بتسجيل الحدث processed=true
+    | إذا لم نستطع معرفة المستخدم والخطة والاشتراك.
+    |--------------------------------------------------------------------------
     */
 
     if (
       event.normalizedType ===
       "SUBSCRIPTION_CREATED"
     ) {
-      let subscription =
-        localSubscription;
+      const customData =
+        getCustomData(data);
+
+      const metadata =
+        getMetadata(data);
+
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
+      const priceId =
+        getWebhookPriceId(data);
+
+      let userId =
+        getWebhookUserId(data);
+
+      let planId =
+        getWebhookPlanId(data);
+
+      let localSubscription = null;
 
       /*
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
       | البحث بواسطة Paddle Subscription ID
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
       */
 
-      if (
-        !subscription &&
-        resolvedSubscriptionId
-      ) {
-        subscription =
+      if (providerSubscriptionId) {
+        localSubscription =
           await getSubscriptionByProviderId(
             provider,
-            resolvedSubscriptionId
+            providerSubscriptionId
           );
       }
 
       /*
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
       | البحث بواسطة Paddle Customer ID
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
       */
 
       if (
-        !subscription &&
-        resolvedCustomerId
+        !localSubscription &&
+        providerCustomerId
       ) {
-        subscription =
+        localSubscription =
           await getSubscriptionByCustomerId(
             provider,
-            resolvedCustomerId
+            providerCustomerId
           );
       }
 
       /*
-      |--------------------------------------------------------------
-      | User
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
+      | إذا وجدنا اشتراكًا محليًا
+      |--------------------------------------------------------------------------
       */
 
-      const userId =
-        resolvedUser?._id ||
-        resolvedUserId ||
-        subscription?.user?._id ||
-        subscription?.user ||
-        null;
+      if (localSubscription) {
+        userId =
+          userId ||
+          localSubscription.user?._id ||
+          localSubscription.user;
+
+        /*
+        | لا نستخدم الخطة القديمة إذا كانت
+        | الخطة القديمة Free إلا إذا لم نجد
+        | طريقة أخرى لمعرفة الخطة.
+        */
+
+        planId =
+          planId ||
+          localSubscription.plan?._id ||
+          localSubscription.plan;
+      }
 
       /*
-      |--------------------------------------------------------------
-      | Plan
-      |--------------------------------------------------------------
-      */
-
-      const planId =
-        resolvedPlanId ||
-        subscription?.plan?._id ||
-        subscription?.plan ||
-        null;
-
-      /*
-      |--------------------------------------------------------------
-      | تفعيل الاشتراك
-      |--------------------------------------------------------------
+      |--------------------------------------------------------------------------
+      | البحث عن المستخدم بواسطة Paddle Customer ID
+      |--------------------------------------------------------------------------
       */
 
       if (
-        userId &&
-        planId &&
-        resolvedSubscriptionId
+        !userId &&
+        providerCustomerId &&
+        provider === "paddle"
       ) {
-        await activateSubscription({
-          userId,
-          planId,
-          provider,
-          providerCustomerId:
-            resolvedCustomerId || "",
-          providerSubscriptionId:
-            resolvedSubscriptionId,
-          billingCycle:
-            resolvedBillingCycle,
-          currentPeriodStart:
-            data.periodStart
-              ? new Date(
-                  data.periodStart
-                )
-              : data.currentPeriodStart
-                ? new Date(
-                    data.currentPeriodStart
-                  )
-                : new Date(),
-          currentPeriodEnd:
-            data.periodEnd
-              ? new Date(
-                  data.periodEnd
-                )
-              : data.currentPeriodEnd
-                ? new Date(
-                    data.currentPeriodEnd
-                  )
-                : null,
-          status:
-            data.status ||
-            "active",
-          metadata: {
-            ...(data.metadata || {}),
-            priceId:
-              resolvedPriceId || "",
-            customerId:
-              resolvedCustomerId || "",
-            subscriptionId:
-              resolvedSubscriptionId || ""
-          }
-        });
-      } else {
-        /*
-        |--------------------------------------------------------------
-        | مهم:
-        | لا نعتبر الحدث ناجحًا إذا لم نستطع ربطه بالمستخدم والخطة.
-        |--------------------------------------------------------------
-        */
+        const providerUser =
+          await findUserByProviderCustomerId(
+            providerCustomerId
+          );
 
+        if (providerUser) {
+          userId =
+            providerUser._id;
+        }
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | البحث عن الخطة بواسطة Paddle Price ID
+      |--------------------------------------------------------------------------
+      */
+
+      if (
+        !planId &&
+        priceId &&
+        provider === "paddle"
+      ) {
+        const pricePlan =
+          await findPlanByProviderPriceId(
+            priceId
+          );
+
+        if (pricePlan) {
+          planId =
+            pricePlan._id;
+        }
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | آخر محاولة: planId داخل custom_data
+      |--------------------------------------------------------------------------
+      */
+
+      if (!planId) {
+        planId =
+          normalizeId(
+            customData.plan ||
+            customData.subscriptionPlan ||
+            metadata.plan ||
+            metadata.subscriptionPlan
+          );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | يجب أن تكون هذه البيانات موجودة
+      |--------------------------------------------------------------------------
+      */
+
+      if (!userId) {
         throw new Error(
           [
-            "Unable to activate Paddle subscription.",
-            `userId=${userId || "missing"}`,
-            `planId=${planId || "missing"}`,
-            `customerId=${resolvedCustomerId || "missing"}`,
-            `subscriptionId=${resolvedSubscriptionId || "missing"}`,
-            `priceId=${resolvedPriceId || "missing"}`
+            "Unable to activate Paddle subscription: userId is missing.",
+            `customerId=${providerCustomerId || ""}`,
+            `subscriptionId=${providerSubscriptionId || ""}`,
+            `priceId=${priceId || ""}`
           ].join(" ")
         );
       }
+
+      if (!planId) {
+        throw new Error(
+          [
+            "Unable to activate Paddle subscription: planId is missing.",
+            `userId=${userId}`,
+            `customerId=${providerCustomerId || ""}`,
+            `subscriptionId=${providerSubscriptionId || ""}`,
+            `priceId=${priceId || ""}`
+          ].join(" ")
+        );
+      }
+
+      if (!providerSubscriptionId) {
+        throw new Error(
+          [
+            "Unable to activate Paddle subscription: subscriptionId is missing.",
+            `userId=${userId}`,
+            `planId=${planId}`,
+            `customerId=${providerCustomerId || ""}`,
+            `priceId=${priceId || ""}`
+          ].join(" ")
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | التأكد أن المستخدم موجود
+      |--------------------------------------------------------------------------
+      */
+
+      const userExists =
+        await User.findById(userId);
+
+      if (!userExists) {
+        throw new Error(
+          `Unable to activate Paddle subscription: user ${userId} was not found.`
+        );
+      }
+
+      /*
+      |--------------------------------------------------------------------------
+      | تفعيل الاشتراك
+      |--------------------------------------------------------------------------
+      */
+
+      const billingCycle =
+        getWebhookBillingCycle(data);
+
+      const periodStart =
+        getWebhookPeriodStart(data);
+
+      const periodEnd =
+        getWebhookPeriodEnd(
+          data,
+          billingCycle
+        );
+
+      const status =
+        getWebhookStatus(data);
+
+      await activateSubscription({
+        userId,
+        planId,
+        provider,
+        providerCustomerId:
+          providerCustomerId || "",
+        providerSubscriptionId,
+        billingCycle,
+        currentPeriodStart:
+          periodStart,
+        currentPeriodEnd:
+          periodEnd,
+        status:
+          status === "canceled" ||
+          status === "expired"
+            ? "active"
+            : status,
+        metadata: {
+          ...(metadata || {}),
+          paddlePriceId:
+            priceId || "",
+          providerEventId:
+            event.providerEventId || "",
+          paddleCustomData:
+            customData || {}
+        }
+      });
     }
 
     /*
     |--------------------------------------------------------------------------
     | CHECKOUT_COMPLETED
+    |--------------------------------------------------------------------------
+    |
+    | لا نفعل الاشتراك هنا.
+    | Paddle subscription.created هو المصدر الأساسي.
     |--------------------------------------------------------------------------
     */
 
@@ -1915,12 +1994,7 @@ async function processWebhookEvent({
       event.normalizedType ===
       "CHECKOUT_COMPLETED"
     ) {
-      /*
-       * لا نفعّل الاشتراك هنا.
-       *
-       * Paddle subscription.created هو المصدر
-       * الأساسي لإنشاء الاشتراك.
-       */
+      // لا شيء هنا عمدًا.
     }
 
     /*
@@ -1933,75 +2007,115 @@ async function processWebhookEvent({
       event.normalizedType ===
       "SUBSCRIPTION_UPDATED"
     ) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
       let subscription = null;
 
-      if (resolvedSubscriptionId) {
+      if (providerSubscriptionId) {
         subscription =
           await Subscription.findOne({
             provider,
-            providerSubscriptionId:
-              resolvedSubscriptionId
+            providerSubscriptionId
           });
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await Subscription.findOne({
             provider,
-            providerCustomerId:
-              resolvedCustomerId
+            providerCustomerId
           });
       }
 
+      /*
+      |--------------------------------------------------------------------------
+      | إذا لم يكن الاشتراك موجودًا بعد
+      |
+      | قد يصل subscription.updated قبل created
+      | في بعض الحالات.
+      |
+      | لا ننشئ اشتراكًا بدون plan/user.
+      |--------------------------------------------------------------------------
+      */
+
       if (subscription) {
-        if (data.status) {
-          subscription.status =
-            data.status;
-        }
+        const status =
+          getWebhookStatus(data);
 
-        if (resolvedCustomerId) {
+        subscription.status =
+          status;
+
+        if (providerCustomerId) {
           subscription.providerCustomerId =
-            resolvedCustomerId;
+            providerCustomerId;
         }
 
-        if (resolvedSubscriptionId) {
+        if (providerSubscriptionId) {
           subscription.providerSubscriptionId =
-            resolvedSubscriptionId;
+            providerSubscriptionId;
         }
 
-        if (resolvedBillingCycle) {
+        const billingCycle =
+          getWebhookBillingCycle(data);
+
+        if (billingCycle) {
           subscription.billingCycle =
-            resolvedBillingCycle;
+            billingCycle;
         }
 
-        if (data.periodStart) {
+        const periodStart =
+          getNested(data, [
+            "periodStart",
+            "period_start",
+            "currentPeriodStart",
+            "current_period_start"
+          ]);
+
+        if (periodStart) {
           subscription.currentPeriodStart =
-            new Date(
-              data.periodStart
-            );
+            new Date(periodStart);
         }
 
-        if (data.periodEnd) {
+        const periodEnd =
+          getNested(data, [
+            "periodEnd",
+            "period_end",
+            "currentPeriodEnd",
+            "current_period_end"
+          ]);
+
+        if (periodEnd) {
           subscription.currentPeriodEnd =
-            new Date(
-              data.periodEnd
-            );
+            new Date(periodEnd);
         }
+
+        const cancelAtPeriodEnd =
+          getNested(data, [
+            "cancelAtPeriodEnd",
+            "cancel_at_period_end"
+          ]);
 
         if (
-          typeof data.cancelAtPeriodEnd ===
+          typeof cancelAtPeriodEnd ===
           "boolean"
         ) {
           subscription.cancelAtPeriodEnd =
-            data.cancelAtPeriodEnd;
+            cancelAtPeriodEnd;
         }
 
         if (
-          data.cancelAtPeriodEnd ===
-          false
+          cancelAtPeriodEnd === false
         ) {
           subscription.canceledAt =
             null;
@@ -2028,26 +2142,34 @@ async function processWebhookEvent({
       event.normalizedType ===
       "SUBSCRIPTION_CANCELED"
     ) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
       let subscription = null;
 
-      if (resolvedSubscriptionId) {
+      if (providerSubscriptionId) {
         subscription =
           await Subscription.findOne({
             provider,
-            providerSubscriptionId:
-              resolvedSubscriptionId
+            providerSubscriptionId
           });
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await Subscription.findOne({
             provider,
-            providerCustomerId:
-              resolvedCustomerId
+            providerCustomerId
           });
       }
 
@@ -2058,11 +2180,15 @@ async function processWebhookEvent({
         subscription.canceledAt =
           new Date();
 
+        const endedAt =
+          getNested(data, [
+            "endedAt",
+            "ended_at"
+          ]);
+
         subscription.endedAt =
-          data.endedAt
-            ? new Date(
-                data.endedAt
-              )
+          endedAt
+            ? new Date(endedAt)
             : new Date();
 
         subscription.cancelAtPeriodEnd =
@@ -2082,38 +2208,45 @@ async function processWebhookEvent({
       event.normalizedType ===
       "INVOICE_PAID"
     ) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
       let subscription = null;
 
-      if (resolvedSubscriptionId) {
+      if (providerSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            resolvedSubscriptionId
+            providerSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            resolvedCustomerId
+            providerCustomerId
           );
       }
 
       const userId =
-        resolvedUser?._id ||
-        resolvedUserId ||
+        getWebhookUserId(data) ||
         subscription?.user?._id ||
-        subscription?.user ||
-        null;
+        subscription?.user;
 
       const subscriptionId =
         subscription?._id ||
-        data.localSubscriptionId ||
-        null;
+        data.localSubscriptionId;
 
       if (
         userId &&
@@ -2128,8 +2261,7 @@ async function processWebhookEvent({
             "",
           amount:
             Number(
-              data.amount ||
-              0
+              data.amount || 0
             ),
           currency:
             data.currency ||
@@ -2167,38 +2299,45 @@ async function processWebhookEvent({
       event.normalizedType ===
       "INVOICE_PAYMENT_FAILED"
     ) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
       let subscription = null;
 
-      if (resolvedSubscriptionId) {
+      if (providerSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            resolvedSubscriptionId
+            providerSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            resolvedCustomerId
+            providerCustomerId
           );
       }
 
       if (subscription) {
-        if (data.status) {
-          subscription.status =
-            data.status;
-        } else if (
-          subscription.status ===
-          "active"
-        ) {
-          subscription.status =
-            "past_due";
-        }
+        const status =
+          getWebhookStatus(data);
+
+        subscription.status =
+          status === "active"
+            ? "past_due"
+            : status;
 
         await subscription.save();
       }
@@ -2214,35 +2353,45 @@ async function processWebhookEvent({
       event.normalizedType ===
       "INVOICE_FAILED"
     ) {
+      const providerSubscriptionId =
+        getWebhookSubscriptionId(
+          data
+        );
+
+      const providerCustomerId =
+        getWebhookCustomerId(
+          data
+        );
+
       let subscription = null;
 
-      if (resolvedSubscriptionId) {
+      if (providerSubscriptionId) {
         subscription =
           await getSubscriptionByProviderId(
             provider,
-            resolvedSubscriptionId
+            providerSubscriptionId
           );
       }
 
       if (
         !subscription &&
-        resolvedCustomerId
+        providerCustomerId
       ) {
         subscription =
           await getSubscriptionByCustomerId(
             provider,
-            resolvedCustomerId
+            providerCustomerId
           );
       }
 
       if (subscription) {
-        if (data.status) {
-          subscription.status =
-            data.status;
-        } else {
-          subscription.status =
-            "past_due";
-        }
+        const status =
+          getWebhookStatus(data);
+
+        subscription.status =
+          status === "active"
+            ? "past_due"
+            : status;
 
         await subscription.save();
       }
@@ -2255,9 +2404,12 @@ async function processWebhookEvent({
     */
 
     eventRecord.processed = true;
+
     eventRecord.processedAt =
       new Date();
-    eventRecord.processingError = "";
+
+    eventRecord.processingError =
+      "";
 
     await eventRecord.save();
 
@@ -2265,9 +2417,18 @@ async function processWebhookEvent({
       success: true
     };
   } catch (error) {
+    /*
+    |--------------------------------------------------------------------------
+    | مهم جدًا:
+    | إذا فشل تفعيل Paddle، لا نخفي الخطأ.
+    |--------------------------------------------------------------------------
+    */
+
     eventRecord.processingError =
-      error?.message ||
+      error.message ||
       "Webhook processing failed";
+
+    eventRecord.processed = false;
 
     await eventRecord.save();
 
@@ -2275,12 +2436,18 @@ async function processWebhookEvent({
   }
 }
 
-
+/*
+|--------------------------------------------------------------------------
+| Exports
+|--------------------------------------------------------------------------
+*/
 
 module.exports = {
   getFreePlan,
   getPlanById,
   getUserSubscription,
+  getSubscriptionByProviderId,
+  getSubscriptionByCustomerId,
   ensureFreeSubscription,
   createCheckout,
   activateSubscription,
@@ -2289,5 +2456,6 @@ module.exports = {
   reactivateSubscription,
   recordPayment,
   createInvoice,
+  updatePaymentStatus,
   processWebhookEvent
 };
