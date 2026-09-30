@@ -22,14 +22,19 @@ const jobLeadSchema = new mongoose.Schema({
     trim: true
   },
 
-  type: {
+  /*type: {
     type: String,
      enum: [
       "hotel",
       "restaurant"
     ], 
     required: true
-  },
+  },*/
+  type: {
+  type: String,
+  required: true,
+  trim: true
+},
 
   country: {
     type: String,

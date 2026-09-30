@@ -39,7 +39,7 @@ router.post( "/import", auth, upload.single("file"),
             data.companyName,
 
           type:
-            data.type || "hotel",
+          data.type,
 
           country:
             data.country,
@@ -113,9 +113,9 @@ router.post( "/import-excel", auth, upload.single("file"),
         const leads = data.map(row => {
 
   const lead = {
-    user: req.user.id,
-    type: row.type || "hotel"
-  };
+  user: req.user.id,
+  type: row.type
+};
 
   if (row.companyName) lead.companyName = row.companyName;
   if (row.country) lead.country = row.country;
@@ -538,6 +538,124 @@ router.delete( "/:id", auth, async (req, res) => {
 // DASHBOARD STATS
 // =====================================
 
+// =====================================
+// DASHBOARD STATS
+// =====================================
+
+router.get("/stats/overview", auth, async (req, res) => {
+
+  try {
+
+    const user = req.user.id;
+
+    // =====================================
+    // TOTAL LEADS
+    // =====================================
+
+    const total = await JobLead.countDocuments({
+      user
+    });
+
+
+    // =====================================
+    // APPLICATIONS SENT
+    // =====================================
+
+    const applicationsSent = await JobLead.countDocuments({
+      user,
+      status: {
+        $in: [
+          "email_sent",
+          "waiting_reply",
+          "interview",
+          "accepted",
+          "rejected"
+        ]
+      }
+    });
+
+
+    // =====================================
+    // WAITING FOR REPLY
+    // =====================================
+
+    const waiting = await JobLead.countDocuments({
+      user,
+      status: "waiting_reply"
+    });
+
+
+    // =====================================
+    // INTERVIEWS
+    // =====================================
+
+    const interviews = await JobLead.countDocuments({
+      user,
+      status: "interview"
+    });
+
+
+    // =====================================
+    // ACCEPTED
+    // =====================================
+
+    const accepted = await JobLead.countDocuments({
+      user,
+      status: "accepted"
+    });
+
+
+    // =====================================
+    // REJECTED
+    // =====================================
+
+    const rejected = await JobLead.countDocuments({
+      user,
+      status: "rejected"
+    });
+
+
+    // =====================================
+    // RESPONSE
+    // =====================================
+
+    res.json({
+
+      success: true,
+
+      total,
+
+      applicationsSent,
+
+      waiting,
+
+      interviews,
+
+      accepted,
+
+      rejected
+
+    });
+
+  } catch (err) {
+
+    console.error(
+      "Failed to fetch job lead stats:",
+      err
+    );
+
+    res.status(500).json({
+
+      success: false,
+
+      error: err.message
+
+    });
+
+  }
+
+});
+/*
 router.get( "/stats/overview", auth, async (req, res) => {
 
     try {
@@ -613,7 +731,7 @@ router.get( "/stats/overview", auth, async (req, res) => {
     }
 
   }
-);
+);*/
 
 
 
@@ -627,7 +745,102 @@ router.get( "/stats/overview", auth, async (req, res) => {
 // =====================================
 // FILTERS
 // =====================================
+router.get("/filters", auth, async (req, res) => {
 
+  try {
+
+    const user = req.user.id;
+
+    // =====================================
+    // TYPES
+    // =====================================
+
+    const types = await JobLead.distinct(
+      "type",
+      {
+        user,
+        type: {
+          $nin: ["", null]
+        }
+      }
+    );
+
+    // =====================================
+    // COUNTRIES
+    // =====================================
+
+    const countries = await JobLead.distinct(
+      "country",
+      {
+        user,
+        country: {
+          $ne: ""
+        }
+      }
+    );
+
+    // =====================================
+    // CITIES
+    // =====================================
+
+    const cities = await JobLead.find(
+      {
+        user,
+        city: {
+          $ne: ""
+        }
+      },
+      "country city"
+    );
+
+    const result = {};
+
+    cities.forEach(item => {
+
+      if (!result[item.country]) {
+        result[item.country] = [];
+      }
+
+      if (
+        !result[item.country].includes(item.city)
+      ) {
+        result[item.country].push(item.city);
+      }
+
+    });
+
+    // =====================================
+    // RESPONSE
+    // =====================================
+
+    res.json({
+
+      success: true,
+
+      types,
+
+      countries,
+
+      cities: result
+
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+
+      success: false,
+
+      error: err.message
+
+    });
+
+  }
+
+});
+/*
 router.get("/filters", auth, async (req, res) => {
 
     try {
@@ -695,7 +908,7 @@ router.get("/filters", auth, async (req, res) => {
     }
 
 });
-
+*/
 
 
 router.get("/emails", auth, async (req, res) => {
