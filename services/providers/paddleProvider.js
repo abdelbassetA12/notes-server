@@ -237,7 +237,7 @@ class PaddleProvider extends PaymentProvider {
    * | Customer
    * |--------------------------------------------------------------------------
    */
- 
+  
 async createCustomer(user) {
   const email = String(user?.email || "").trim();
 
@@ -248,26 +248,38 @@ async createCustomer(user) {
   }
 
   const headers = {
-    Authorization: `Bearer ${process.env.PADDLE_API_KEY}`,
+    Authorization: `Bearer ${this.apiKey}`,
     "Content-Type": "application/json",
+    Accept: "application/json",
     "Paddle-Version": "1"
   };
 
-  const baseUrl =
-    process.env.PADDLE_ENVIRONMENT === "sandbox"
-      ? "https://sandbox-api.paddle.com"
-      : "https://api.paddle.com";
+  // --------------------------------------------------
+  // 1. ابحث عن Customer موجود بنفس البريد
+  //    نبحث في active + archived
+  // --------------------------------------------------
 
-  // 1. البحث أولاً عن Customer موجود بنفس البريد
-  const searchResponse = await fetch(
-    `${baseUrl}/customers?email=${encodeURIComponent(email)}`,
-    {
-      method: "GET",
-      headers
-    }
-  );
+  const searchUrl =
+    `${this.baseUrl}/customers` +
+    `?email=${encodeURIComponent(email)}` +
+    `&status=active,archived`;
 
-  const searchData = await searchResponse.json();
+  const searchResponse = await fetch(searchUrl, {
+    method: "GET",
+    headers
+  });
+
+  const searchText = await searchResponse.text();
+
+  let searchData = {};
+
+  try {
+    searchData = searchText
+      ? JSON.parse(searchText)
+      : {};
+  } catch {
+    searchData = {};
+  }
 
   if (!searchResponse.ok) {
     throw new Error(
@@ -277,44 +289,197 @@ async createCustomer(user) {
     );
   }
 
-  const existingCustomer =
-    searchData?.data?.find(
-      (customer) =>
-        String(customer.email || "").toLowerCase() ===
-        email.toLowerCase()
-    );
+  const customers = Array.isArray(searchData?.data)
+    ? searchData.data
+    : [];
 
-  if (existingCustomer) {
+  const existingCustomer = customers.find(
+    (customer) =>
+      String(customer?.email || "")
+        .trim()
+        .toLowerCase() === email.toLowerCase()
+  );
+
+  // --------------------------------------------------
+  // 2. Customer موجود بالفعل
+  // --------------------------------------------------
+
+  if (existingCustomer?.id) {
+    // إذا كان archived نحاول إعادته إلى active
+    if (existingCustomer.status === "archived") {
+      const restoreResponse = await fetch(
+        `${this.baseUrl}/customers/${existingCustomer.id}`,
+        {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({
+            status: "active"
+          })
+        }
+      );
+
+      const restoreText =
+        await restoreResponse.text();
+
+      let restoreData = {};
+
+      try {
+        restoreData = restoreText
+          ? JSON.parse(restoreText)
+          : {};
+      } catch {
+        restoreData = {};
+      }
+
+      if (!restoreResponse.ok) {
+        throw new Error(
+          restoreData?.error?.detail ||
+          restoreData?.error?.message ||
+          "Failed to reactivate Paddle customer."
+        );
+      }
+
+      const restoredCustomer =
+        restoreData?.data;
+
+      return {
+        provider: "paddle",
+        id:
+          restoredCustomer?.id ||
+          existingCustomer.id,
+        providerCustomerId:
+          restoredCustomer?.id ||
+          existingCustomer.id,
+        email:
+          restoredCustomer?.email ||
+          existingCustomer.email,
+        name:
+          restoredCustomer?.name ||
+          existingCustomer.name ||
+          null
+      };
+    }
+
     return {
-      providerCustomerId: existingCustomer.id,
+      provider: "paddle",
       id: existingCustomer.id,
-      email: existingCustomer.email
+      providerCustomerId: existingCustomer.id,
+      email: existingCustomer.email,
+      name: existingCustomer.name || null
     };
   }
 
-  // 2. إذا لم يوجد Customer، أنشئ واحداً
+  // --------------------------------------------------
+  // 3. لا يوجد Customer -> أنشئ واحداً
+  // --------------------------------------------------
+
   const createResponse = await fetch(
-    `${baseUrl}/customers`,
+    `${this.baseUrl}/customers`,
     {
       method: "POST",
       headers,
       body: JSON.stringify({
-        email
+        email,
+        name: this.getUserName(user),
+        custom_data: {
+          qevoraUserId: String(
+            this.getUserId(user)
+          )
+        }
       })
     }
   );
 
-  const createData = await createResponse.json();
+  const createText =
+    await createResponse.text();
+
+  let createData = {};
+
+  try {
+    createData = createText
+      ? JSON.parse(createText)
+      : {};
+  } catch {
+    createData = {};
+  }
+
+  // --------------------------------------------------
+  // 4. حماية إضافية:
+  //    لو حدث Race Condition وكان Customer
+  //    قد أنشئ بين البحث والإنشاء
+  // --------------------------------------------------
 
   if (!createResponse.ok) {
+    const errorCode =
+      createData?.error?.code || "";
+
+    const errorDetail =
+      createData?.error?.detail || "";
+
+    const conflictIdMatch =
+      errorDetail.match(
+        /ctm_[a-z0-9]+/i
+      );
+
+    if (
+      createResponse.status === 409 ||
+      errorCode === "customer_already_exists"
+    ) {
+      const conflictingCustomerId =
+        conflictIdMatch?.[0];
+
+      if (conflictingCustomerId) {
+        const existingResponse =
+          await fetch(
+            `${this.baseUrl}/customers/${conflictingCustomerId}`,
+            {
+              method: "GET",
+              headers
+            }
+          );
+
+        const existingText =
+          await existingResponse.text();
+
+        let existingData = {};
+
+        try {
+          existingData = existingText
+            ? JSON.parse(existingText)
+            : {};
+        } catch {
+          existingData = {};
+        }
+
+        if (
+          existingResponse.ok &&
+          existingData?.data?.id
+        ) {
+          return {
+            provider: "paddle",
+            id: existingData.data.id,
+            providerCustomerId:
+              existingData.data.id,
+            email:
+              existingData.data.email ||
+              email,
+            name:
+              existingData.data.name ||
+              null
+          };
+        }
+      }
+    }
+
     throw new Error(
-      createData?.error?.detail ||
+      errorDetail ||
       createData?.error?.message ||
       "Failed to create Paddle customer."
     );
   }
 
-  const customer = createData?.data;
+  const customer =
+    createData?.data;
 
   if (!customer?.id) {
     throw new Error(
@@ -323,11 +488,16 @@ async createCustomer(user) {
   }
 
   return {
-    providerCustomerId: customer.id,
+    provider: "paddle",
     id: customer.id,
-    email: customer.email
+    providerCustomerId: customer.id,
+    email: customer.email,
+    name: customer.name || null
   };
 }
+ 
+
+ 
  
 
 /*
