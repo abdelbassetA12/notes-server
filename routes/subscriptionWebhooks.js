@@ -31,6 +31,10 @@ const {
 router.post(
   "/:provider",
   async (req, res) => {
+    console.log("========================================");
+console.log("SUBSCRIPTION WEBHOOK RECEIVED");
+console.log("Provider:", req.params.provider);
+console.log("========================================");
     try {
       /**
        * |--------------------------------------------------------------------------
@@ -103,6 +107,12 @@ router.post(
           request: req
         });
 
+        console.log("========================================");
+console.log("PADDLE WEBHOOK VERIFIED");
+console.log("Event:", verifiedEvent?.event_type);
+console.log("Data:", JSON.stringify(verifiedEvent?.data, null, 2));
+console.log("========================================");
+
       if (!verifiedEvent) {
         return res.status(400).json({
           success: false,
@@ -130,6 +140,13 @@ router.post(
           verifiedEvent
         );
 
+        console.log("========================================");
+console.log("PADDLE WEBHOOK NORMALIZED");
+console.log(
+  JSON.stringify(normalizedEvent, null, 2)
+);
+console.log("========================================");
+
       if (!normalizedEvent) {
         return res.status(400).json({
           success: false,
@@ -143,7 +160,9 @@ router.post(
        * معالجة الحدث
        * |--------------------------------------------------------------------------
        */
-
+    console.log("========================================");
+console.log("PROCESSING SUBSCRIPTION WEBHOOK");
+console.log("========================================");
       await processWebhookEvent({
         provider: providerName,
         event: normalizedEvent
