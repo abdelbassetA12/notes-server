@@ -1640,6 +1640,44 @@ async function processWebhookEvent({
         userId &&
         subscriptionId
       ) {
+
+        await recordPayment({
+  userId,
+  subscriptionId,
+  provider,
+
+  providerPaymentId:
+    data.paymentId ||
+    data.payment_id ||
+    data.transactionId ||
+    data.transaction_id ||
+    data.id ||
+    "",
+
+  amount:
+    Number(
+      data.amount ||
+      data.details?.totals?.total ||
+      0
+    ) / 100,
+
+  currency:
+    data.currency ||
+    data.currency_code ||
+    data.details?.totals?.currency_code ||
+    "USD",
+
+  type:
+    data.type ||
+    "subscription",
+
+  status: "paid",
+
+  metadata:
+    data.metadata ||
+    {}
+});
+         /*
         await recordPayment({
           userId,
           subscriptionId,
@@ -1665,6 +1703,7 @@ async function processWebhookEvent({
             data.metadata ||
             {}
         });
+        */
       }
     }
 
