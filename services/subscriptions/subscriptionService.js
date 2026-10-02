@@ -168,12 +168,25 @@ function getWebhookSubscriptionId(data) {
     getNested(data, [
       "subscriptionId",
       "subscription_id",
+      "subscription.id",
+    ]) ||
+    (typeof data?.id === "string" && data.id.startsWith("sub_")
+      ? data.id
+      : null)
+  );
+}
+/*
+function getWebhookSubscriptionId(data) {
+  return (
+    getNested(data, [
+      "subscriptionId",
+      "subscription_id",
       "subscription.id"
     ]) ||
     null
   );
 }
-
+*/
 function getWebhookPriceId(data) {
   const customData =
     getCustomData(data);
